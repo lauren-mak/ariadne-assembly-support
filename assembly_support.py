@@ -251,10 +251,10 @@ def concat_annotations(infile, outdir):
     df = pd.read_csv(infile, names = ['Name', 'Barcode', 'Direction', 'Reference'])
     logger(f'Finished loading the annotations')
     barcodes = df.Barcode.unique()
-    prefix = join(outdir, '.'.join(basename(infile).split('.')[:-1]))
+    file_basename = '.'.join(basename(infile).split('.')[:-1].append('csv'))
     logger(f'{len(barcodes)} read clouds')
-    with open(prefix + '.R1.csv', 'w') as ff:
-        with open(prefix + '.R2.csv', 'w') as rf:
+    with open(join(outdir, 'R1', file_basename), 'w') as ff:
+        with open(join(outdir, 'R2', file_basename), 'w') as rf:
             for i, b in enumerate(barcodes):
                 df_b = df.loc[df['Barcode'] == b]
                 references = df_b.Reference.unique().tolist()
