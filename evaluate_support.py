@@ -1,9 +1,9 @@
 
-import click
 from csv import reader, writer
 from collections import Counter
 from datetime import datetime
 from os.path import basename, join
+from sys import stderr
 
 # Pandas and numpy for data manipulation
 import numpy as np
@@ -17,19 +17,10 @@ from matplotlib import colors
 from matplotlib import cm
 
 
-@click.group()
-def main():
-    pass
+def logger(msg):
+    print(f'{datetime.now()}: {msg}', file = stderr)
 
 
-def logger(i):
-    click.echo(f'{datetime.now()}: {i}', err=True)
-
-
-@main.command('fastq_to_table')
-@click.argument('fastq') # FastQ file with original read clouds
-@click.argument('mapping_tbl') # Table of read name,barcode,direction,ref_seq
-@click.argument('outdir') # Analysis output directory
 def fastq_to_table(fastq, mapping_tbl, outdir):
     """Generates tables pairing enhanced cloud numbers with the actual reference sequence. Output is [barcode, enhanced_num, reference name]"""
     logger(f'Loading read cloud information from {fastq}')
@@ -44,7 +35,7 @@ def fastq_to_table(fastq, mapping_tbl, outdir):
     with open(mapping_tbl, 'r') as mf:
         for line in mf:
             read_to_seq = line.strip().split(',')
-            read_seq_map[read_to_seq[0]] = read_to_seq[3]
+            read_seq_map[read_to_seq[0]] = read_to_seq[2]
 
     logger(f'Adding reference sequence information to reads')
     for i, read_name in enumerate(full_name_list):
@@ -83,7 +74,7 @@ def evaluate_cloud(species_cts):
     return size, max(species_cts) / size, fabs(entropy) # entropy < 0 unless count = size i.e.: a pure cluster. 
 
 
-def merge_clouds(forward_lst, reverse_lst, sl):
+def merge_clouds_species(forward_lst, reverse_lst, sl):
     summary_info = [] # [letters, number, size, purity, entropy]
     species_info = [] # [species_counts...]
     cloud_counts = []
@@ -116,6 +107,38 @@ def merge_clouds(forward_lst, reverse_lst, sl):
         summary_info.append([curr_barcode, c, size, purity, entropy])
         cloud_counts.append(size)
     return species_info, summary_info, cloud_counts
+
+
+def merge_clouds_fragments(forward_lst, reverse_lst):
+    summary_info = [] # [letters, number, size, purity, entropy]
+    cloud_counts = []
+    num_enhanced_clouds = 0 
+    curr_barcode = forward_lst[0][0]
+    cloud_ref_dict = {}
+    for i in range(len(forward_lst)):
+        barcode = forward_lst[i][0]
+        if barcode != curr_barcode:
+            for c in cloud_ref_dict:
+                frag_cts = Counter(cloud_ref_dict[c]).values()
+                size, purity, entropy = evaluate_cloud(frag_cts)
+                summary_info.append([curr_barcode, c, size, purity, entropy])
+                cloud_counts.append(size)
+            if (num_enhanced_clouds % 100000) == 0:
+                logger(f'Processed {num_enhanced_clouds} enhanced clouds')
+                num_enhanced_clouds += 1
+            curr_barcode = barcode
+            cloud_ref_dict = {}
+        cloud_num = forward_lst[i][1] 
+        if cloud_num not in cloud_ref_dict:
+            cloud_ref_dict[cloud_num] = []
+        cloud_ref_dict[cloud_num].append(forward_lst[i][2])
+        cloud_ref_dict[cloud_num].append(reverse_lst[i][2])
+    for c in cloud_ref_dict:
+        frag_cts = Counter(cloud_ref_dict[c]).values()
+        size, purity, entropy = evaluate_cloud(frag_cts)
+        summary_info.append([curr_barcode, c, size, purity, entropy])
+        cloud_counts.append(size)
+    return summary_info, cloud_counts
 
 
 def dataset_summary(cloud_counts, prefix):
@@ -151,28 +174,26 @@ def dataset_summary(cloud_counts, prefix):
     # size_df.to_csv(outdir + '/' + prefix + '.dataset.csv', header = False)
 
 
-@main.command('generate_summaries')
-@click.argument('forward_tbl') # Forward FastQ table
-@click.argument('reverse_tbl') # Reverse FastQ table 
-@click.argument('id_csv') # Acccesion ID to reference sequence name  
-@click.argument('outdir') # Analysis output directory
-def generate_summaries(forward_tbl,reverse_tbl,id_csv,outdir): 
+def generate_summaries(forward_tbl, reverse_tbl, id_csv, outdir): 
     """Calculate summary statistics for each and across all enhanced read clouds using the matched enhanced-actual information above. Output are [barcode, enhanced_num, size, purity, entropy] and [barcode, enhanced_num, species list]"""
     logger('Loading forward FastQ information')
     forward_lst = load_tbl(forward_tbl)
     logger('Loading reverse FastQ information')
     reverse_lst = load_tbl(reverse_tbl)
-    species_df = pd.read_csv(id_csv, header = None)
-    species_lst = list(species_df.iloc[:,1])
-
-    species_info, summary_info, cloud_counts = merge_clouds(forward_lst, reverse_lst, species_lst)
 
     prefix = join(outdir, basename(forward_tbl).split('.')[0])
+    if id_csv:
+        species_df = pd.read_csv(id_csv, header = None)
+        species_lst = list(species_df.iloc[:,1])
+        species_info, summary_info, cloud_counts = merge_clouds_species(forward_lst, reverse_lst, species_lst)
+        with open(prefix + '.species.csv', 'w') as of: # Barcode,Cloud_Num,Species_0,Species_1,Species_2...
+            ow = writer(of)
+            ow.writerow(['Barcode', 'Cloud_Num'] + species_lst + ['None'])
+            ow.writerows(species_info)
+    else:
+        summary_info, cloud_counts = merge_clouds_fragments(forward_lst, reverse_lst)
+
     dataset_summary(cloud_counts, prefix)
-    with open(prefix + '.species.csv', 'w') as of: # Barcode,Cloud_Num,Species_0,Species_1,Species_2...
-        ow = writer(of)
-        ow.writerow(['Barcode', 'Cloud_Num'] + species_lst + ['None'])
-        ow.writerows(species_info)
     with open(prefix + '.statistics.csv', 'w') as of:
         ow = writer(of)
         ow.writerow(['Barcode', 'Cloud_Num', 'Size', 'Purity', 'Entropy'])
@@ -259,10 +280,6 @@ def make_secondary_graphs(param_list, distances, param_name, outdir):
     df.to_csv('{}/{}.tbl'.format(outdir, param2strng))
 
 
-@main.command('evaluate_clouds')
-@click.option('--distances', '-d', help='Ariadne search distances to compare') # e.g.: 0,10000,15000,20000
-@click.option('--prefixes', '-p', help='CSV prefixes') # e.g.: mock5_10x,5000_full,10000_full
-@click.argument('outdir') 
 def evaluate_clouds(distances, prefixes, outdir):
     """Make summary graphs of the summary information table from generate_summaries()."""
     start_time = datetime.now()
@@ -295,8 +312,4 @@ def evaluate_clouds(distances, prefixes, outdir):
     avg_cloud_entropy = list(map(lambda df: np.mean(df['Entropy']), all_df_list))
     make_secondary_graphs(avg_cloud_entropy, search_distances, 'Avg. Cloud Entropy.', outdir)
     logger('Finished the accessory graphs')
-
-
-if __name__ == '__main__':
-    main()
 

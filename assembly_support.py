@@ -1,10 +1,10 @@
 
-import click
 from csv import writer
 from datetime import datetime
 from math import floor
 from os import listdir
 from os.path import basename, isfile, join
+from sys import stderr
 
 # FastQ/BAM data manipulation
 import pysam
@@ -14,13 +14,8 @@ import numpy as np
 import pandas as pd
 
 
-@click.group()
-def main():
-    pass
-
-
-def logger(i):
-    click.echo(f'{datetime.now()}: {i}', err=True)
+def logger(msg):
+    print(f'{datetime.now()}: {msg}', file = stderr)
 
 
 def prefix(fn):
@@ -31,11 +26,8 @@ def prefix(fn):
 General FastQ Preprocessing Functions
 """
 
+
 # @D00547:847:HYHNTBCXX:1:1101:10000:21465 BX:Z:CGCCGAAGTCACGCAC-1
-@main.command('barcode_sorter')
-@click.argument('in_fq') # FastQ file with original read clouds
-@click.argument('outdir') 
-@click.option('--cloud-sizes', flag_value=True)
 def barcode_sorter(in_fq, outdir, cloud_sizes):
     """Sorts FastQ reads based on their barcode and cloud number. Tags barcoded reads with '-1' if not already there. Must be used at the end of any enhancement workflow and/or before usage in cloudSPAdes."""
     bc2reads = {} # {barcode,{cloud_num,[read_lines]}}
@@ -93,6 +85,7 @@ def barcode_sorter(in_fq, outdir, cloud_sizes):
 Support Functions for Ariadne
 """
 
+
 def get_read_names(fq_file):
     logger('Importing read names from the file ' + fq_file)
     names = {}
@@ -122,10 +115,6 @@ def get_read_full(fq_file):
     return reads 
 
 
-@main.command('complete_reads')
-@click.argument('original_fq') # FastQ file with original read clouds
-@click.argument('enhanced_fq') # FastQ file with enhanced read clouds
-@click.argument('full_fq') # Output FastQ file with missing unbarcoded reads
 def complete_reads(original_fq, enhanced_fq, full_fq):
     """Adds reads missing from the enhanced FastQs based on the total set of reads in the original FastQs."""
     enh_names = get_read_names(enhanced_fq)
@@ -151,17 +140,13 @@ def complete_reads(original_fq, enhanced_fq, full_fq):
 FastQ Preprocessing Functions for Other Tools
 """
 
+
 def decimalToBinary(n):  
     return bin(int(n)).replace("0b", "")  
 
 
-@main.command('bam_to_annotate')
-@click.argument('bam') # Completed BAM file
-@click.argument('id_csv') # Acccesion ID to reference sequence name  
-@click.argument('outdir') 
-@click.option('--est-fragments', flag_value=True)
 def bam_to_annotate(bam, id_csv, outdir, est_fragments):
-    """Generates read cloud enhancement information from BAM files. Output is [read, barcode (not in bwa files), direction, reference name (+ estimated fragment start)]."""
+    """Generates read cloud enhancement information from BAM files. Output is [read, direction, reference name, (insert start position), (barcode)]."""
     inbam = pysam.AlignmentFile(bam, 'rb')
     id2seq = {}
     id2seq['None'] = 'None'
@@ -172,30 +157,32 @@ def bam_to_annotate(bam, id_csv, outdir, est_fragments):
 
     # Ingest BAM file and extract mapped-to references and read-directions in pairs. 
     read_info_tbl = []
-    with open(join(outdir, prefix(bam) + '.csv'), 'w') as of:
-        ow = writer(of)
-        inbam = pysam.AlignmentFile(bam, 'rb')
-        for read in inbam.fetch(until_eof=True):
-            read_name = read.query_name
-            read_dir = str(1 - int((decimalToBinary(read.flag))[-7])) # 0 = forward, 1 = reverse
-            start_pos = ''
-            if est_fragments and read.reference_name:
-                # Find the left-most coordinate, and round down to the nearest multiple of 100,000, the estimated largest fragment size. 
-                start_pos = '-' + str(100000 * floor(min(read.reference_start, read.next_reference_start)) / 100000)  
-            read_aln_info = id2seq[read.reference_name] + start_pos if read.reference_name else 'None'
-            if read.has_tag('BX'):
-                read_barcode = read.get_tag('BX')[2:-2]
-                ow.writerow([read_name, read_barcode, read_dir, read_aln_info])
-            else:
-                ow.writerow([read_name, read_dir, read_aln_info])
+    inbam = pysam.AlignmentFile(bam, 'rb')
+    for read in inbam.fetch(until_eof=True):
+        read_info = [read.query_name]
+        read_info.append(1 - int((decimalToBinary(read.flag))[-7])) # Direction: 0 = forward, 1 = reverse
+        if read.reference_name and est_fragments:
+            # Find the left-most coordinate, and round down to the nearest multiple of 100,000, the estimated largest fragment size. 
+            # start_pos = '-' + str(100000 * floor(min(read.reference_start, read.next_reference_start)) / 100000)  
+            read_info += [id2seq[read.reference_name], min(read.reference_start, read.next_reference_start)] # Mapped-to reference
+        elif read.reference_name: 
+            read_info += [id2seq[read.reference_name]]
+        elif est_fragments:
+            read_info += ['None', '-1']
+        else:
+            read_info += ['None']
+        # if read.has_tag('BX'): # TODO correct this for EMA
+        #     read_barcode = read.get_tag('BX')[2:-2]
+        #     read_info_tbl.append([read_name, read_barcode, direction, read_aln_info])
+        # else:
+        read_info_tbl.append(read_info)
+    col_names = ['Name', 'Direction', 'Reference']
+    col_names.append('Start') if est_fragments else None
+    pd.DataFrame(read_info_tbl).to_csv(join(outdir, prefix(bam) + '.csv'), index = False, header = col_names)    
 
 
-@main.command('add_barcodes')
-@click.argument('fastq')
-@click.argument('annot_csv')
-@click.argument('outdir') 
 def add_barcodes(fastq, annot_csv, outdir):
-    """Re-adds FastQ barcodes to bwa-based annotation file generated by bam_to_annotate. Output is [read, barcode, direction, reference name]. bwa-specific."""
+    """Re-adds FastQ barcodes to bwa-based annotation file generated by bam_to_annotate. Output is [read, direction, reference name, (insert start position), barcode]. bwa-specific."""
     read2bc = {}
     logger(f'Loading read cloud information from {fastq}')
     with open(fastq,'r') as fq:
@@ -208,13 +195,12 @@ def add_barcodes(fastq, annot_csv, outdir):
                     read2bc[name_components[0]] = 'None'
             if (i % 100000) == 0:
                 logger(f'Finished processing {i} lines')
-    df = pd.read_csv(annot_csv, names = ['Name', 'Direction', 'Reference'])
+    df = pd.read_csv(annot_csv)
     logger(f'Adding barcodes to the read mapping information')
     df['Barcode']= df['Name'].map(read2bc)
-    df = df[['Name', 'Barcode', 'Direction', 'Reference']]
     logger(f'Sorting in order of barcodes, read names, and direction')
-    df.sort_values(['Barcode', 'Name', 'Direction'], axis = 0, ascending = [True, True, True], inplace = True, na_position ='last') 
-    df.to_csv(join(outdir, prefix(annot_csv) + '.final.csv'), index = False, header = False)
+    df.sort_values(['Barcode', 'Reference'], axis = 0, ascending = [True, True], inplace = True, na_position ='last') 
+    df.to_csv(join(outdir, prefix(annot_csv) + '.final.csv'), index = False, header = True)
 
 
 def split_into_chunks(l, n):
@@ -222,13 +208,10 @@ def split_into_chunks(l, n):
         yield l[i:i + n]   # yields successive n-sized chunks of data
 
 
-@main.command('subdiv_annotations')
-@click.argument('infile') # Aggregated read information 
-@click.argument('outdir') 
 def subdiv_annotations(infile, outdir):
-    """Subsets total set of read clouds into smaller sets of read clouds (FastQ format still) so that the next step (concat_annotations) doesn't take forever. bwa-specific."""
+    """Subsets total set of read clouds into smaller sets of read clouds so that the next step (concat_annotations) doesn't take forever. bwa-specific."""
     logger(f'Started loading the annotations')
-    df = pd.read_csv(infile, names = ['Name', 'Barcode', 'Direction', 'Reference'])
+    df = pd.read_csv(infile, header = 0)
     logger(f'Finished loading the annotations')
     barcodes = df.Barcode.unique().tolist()
     barcodes.remove('None')
@@ -238,45 +221,71 @@ def subdiv_annotations(infile, outdir):
     logger(f'{len(barcode_sublists)} sublists of approximately {chunk_size} read clouds each')
     for i, bl in enumerate(barcode_sublists):
         df_b = df[df.Barcode.isin(bl)]
-        df_b.to_csv(join(outdir, '.'.join([prefix(infile), str(i), 'csv'])), index = False, header = False)
+        df_b.to_csv(join(outdir, '.'.join([prefix(infile), str(i), 'csv'])), index = False)
         if (i % 10) == 0:
             logger(f'Finished processing {i} barcode sublists')
 
 
-@main.command('concat_annotations')
-@click.argument('infile') # Aggregated read information 
-@click.argument('outdir') 
-def concat_annotations(infile, outdir):
-    """Aggregates reference mapping information in each read cloud and generates enhanced groupings. Output is [read, enhanced_num]."""
-    df = pd.read_csv(infile, names = ['Name', 'Barcode', 'Direction', 'Reference'])
+def species_annot(df, barcodes): 
+    """[read, direction, reference name, barcode]"""
+    fw = []
+    rv = []
+    for i, b in enumerate(barcodes):
+        df_b = df.loc[df['Barcode'] == b]
+        references = df_b.Reference.unique().tolist()
+        if len(references) > 1:
+            for j in range(len(df_b)):
+                read_ref = references.index(df_b.iloc[j,2]) # Index/enhanced cloud of the read's reference
+                if df_b.iloc[j,1]: 
+                    rv.append([df_b.iloc[j,0], read_ref])
+                else:
+                    fw.append([df_b.iloc[j,0], read_ref])
+        if (i % 10000) == 0:
+            logger(f'{i} original read clouds processed')
+    return fw, rv
+
+
+def fragment_annot(df, barcodes):
+    """[read, direction, reference name, insert start position, barcode]"""
+    fw = []
+    rv = []
+    for i, b in enumerate(barcodes):
+        df_b = df.loc[df['Barcode'] == b]
+        cloud_idx = 0
+        for j in df_b.Reference.unique().tolist():
+            ref_idx = cloud_idx
+            df_r = df_b.loc[df_b['Reference'] == j]
+            start_pos = df_r.Start.tolist()[0] # Leftmost start on reference j. Should be pre-sorted from SAM
+            for k in range(len(df_r)):
+                if df_r.iloc[k,3] > start_pos + 200000: # Read start outside 2 x max. est. fragment size
+                    ref_idx += 1
+                    start_pos = df_r.iloc[k,3]
+                read_info = [df_r.iloc[k,0], ref_idx, j + '-' + str(ref_idx)] # ref-enh_num
+                rv.append(read_info) if df_r.iloc[k,1] else fw.append(read_info)
+            cloud_idx = ref_idx + 1
+    return fw, rv
+
+
+def concat_annotations(infile, outdir, est_fragments):
+    """Aggregates reference mapping information in each read cloud and generates enhanced groupings. Output is [read, enh_num, (ref-enh_num)]."""
+    df = pd.read_csv(infile)
     logger(f'Finished loading the annotations')
     barcodes = df.Barcode.unique()
-    file_basename = '.'.join(basename(infile).split('.')[:-1].append('csv'))
     logger(f'{len(barcodes)} read clouds')
-    with open(join(outdir, 'R1', file_basename), 'w') as ff:
-        with open(join(outdir, 'R2', file_basename), 'w') as rf:
-            for i, b in enumerate(barcodes):
-                df_b = df.loc[df['Barcode'] == b]
-                references = df_b.Reference.unique().tolist()
-                if len(references) > 1:
-                    for j in range(len(df_b)):
-                        read_ref = references.index(df_b.iloc[j,3]) # Index/enhanced cloud of the read's reference
-                        if df_b.iloc[j,2] == 0: 
-                            ff.write(df_b.iloc[j,0] + ',' + str(read_ref) + '\n')
-                        else:
-                            rf.write(df_b.iloc[j,0] + ',' + str(read_ref) + '\n')
-                if (i % 10000) == 0:
-                    logger(f'{infile} {i} original read clouds processed')
+    fw, rv = fragment_annot(df, barcodes) if est_fragments else species_annot(df, barcodes)
+    pd.DataFrame(fw).to_csv(join(outdir, 'R1', basename(infile)), index = False, header = False)    
+    pd.DataFrame(rv).to_csv(join(outdir, 'R2', basename(infile)), index = False, header = False)    
 
 
 def load_from_dir(enh_dir):
+    """TODO: Probably deprecate in the future since concatenation function is in the pipeline now."""
     name_enh_dict = {}
     enh_list = [f for f in listdir(enh_dir) if isfile(join(enh_dir, f))]
     for i, f in enumerate(enh_list):
         name_enh_dict.update(load_from_csv(join(enh_dir,f)))
-        if (i % 10 == 0):
-            logger(f'Finished processing {i} enhanced CSVs')            
-    return name_enh_dict     
+        if (i % 20 == 0):
+            logger(f'Loaded {i} enhanced CSVs')            
+    return name_enh_dict
 
 
 def load_from_csv(enh_csv):
@@ -288,23 +297,13 @@ def load_from_csv(enh_csv):
     return name_enh_dict
 
 
-@main.command('fastq_enhance')
-@click.argument('in_fq')
-@click.argument('outdir')
-@click.option('--enh_dir', '-d', help='Read name-to-enhanced cloud number directory') 
-@click.option('--enh_csv', '-c', help='Read name-to-enhanced cloud number CSV') 
-def fastq_enhance(in_fq, enh_dir, enh_csv, outdir):
+def fastq_enhance(in_fq, enh_csv, outdir, prefix):
     """Replaces original cloud number with tool-enhanced number."""
-    if enh_dir: 
-        enhanced_dict = load_from_dir(enh_dir) # For bwa, where replacements are spread over many CSVs
-        tool = 'bwa'
-    else:
-        enhanced_dict = load_from_csv(enh_csv) # For ema, which produces a single CSV
-        tool = 'ema'
+    enhanced_dict = load_from_csv(enh_csv)
 
     # Replace the original groupings with enhanced groupings
     in_fq_parts = basename(in_fq).split('.')
-    out_fq = join(outdir, '.'.join([in_fq_parts[0] + '_' + tool, in_fq_parts[1], in_fq_parts[2]]))
+    out_fq = join(outdir, '.'.join([prefix, in_fq_parts[1], in_fq_parts[2]]))
     with open(out_fq, 'w') as of:
         with open(in_fq, 'r') as fq: 
             for i, line in enumerate(fq):
@@ -320,9 +319,4 @@ def fastq_enhance(in_fq, enh_dir, enh_csv, outdir):
                     of.write(line)
                 if (i % 10000000 == 0):
                     logger(f'Finished processing {i} lines from {in_fq}')            
-
-
-if __name__ == '__main__':
-    main()
-
 
