@@ -83,7 +83,7 @@ class Subdivide_Original_Clouds(luigi.Task):
         return luigi.LocalTarget(djoin(gp.work_dir, 'subdivide_original_clouds.out'))
 
     def run(self):
-        subdiv_annotations(self.input().path, gp.orig_map_dir)
+        subdiv_annotations(self.input().path, gp.num_chunks, gp.orig_map_dir)
         with self.output().open('w') as of:
             of.write(f'{gp.num_chunks} chunks were created')
 

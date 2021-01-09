@@ -37,6 +37,7 @@ def barcode_sorter(in_fq, outdir, cloud_sizes):
     curr_enh = ''
     with open(in_fq, 'r') as fq:
         for i, line in enumerate(fq): 
+            output = line
             if (i % 4) == 0:
                 bc = ''
                 enh = ''
@@ -59,10 +60,9 @@ def barcode_sorter(in_fq, outdir, cloud_sizes):
                     curr_bc = 'NA'
                     curr_enh = 'NA'
                     cloud_numbered = True
-            if cloud_numbered:
-                bc2reads[curr_bc][curr_enh].append(line)
-            else: 
-                bc2reads[curr_bc][curr_enh].append(line.strip() + '-1\n')
+                if not cloud_numbered:
+                    output = line.strip() + '-1\n'
+            bc2reads[curr_bc][curr_enh].append(output)
             if (i % 10000000) == 0: 
                 logger(f'Finished processing line {i}')
 
@@ -208,15 +208,15 @@ def split_into_chunks(l, n):
         yield l[i:i + n]   # yields successive n-sized chunks of data
 
 
-def subdiv_annotations(infile, outdir):
+def subdiv_annotations(infile, num_chunks, outdir):
     """Subsets total set of read clouds into smaller sets of read clouds so that the next step (concat_annotations) doesn't take forever. bwa-specific."""
     logger(f'Started loading the annotations')
     df = pd.read_csv(infile, header = 0)
     logger(f'Finished loading the annotations')
     barcodes = df.Barcode.unique().tolist()
-    barcodes.remove('None')
+    # barcodes.remove('None')
     logger(f'{len(barcodes)} read clouds')
-    chunk_size = (int)(len(barcodes) / 100) + 1
+    chunk_size = (int)(len(barcodes) / int(num_chunks)) + 1
     barcode_sublists = list(split_into_chunks(barcodes, chunk_size))
     logger(f'{len(barcode_sublists)} sublists of approximately {chunk_size} read clouds each')
     for i, bl in enumerate(barcode_sublists):
