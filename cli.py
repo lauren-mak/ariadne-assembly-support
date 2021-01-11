@@ -1,22 +1,7 @@
 
 import click
-
-# Import from APIs
-from assembly_support import (
-    barcode_sorter,
-    bam_to_annotate,
-    add_barcodes,
-    subdiv_annotations,
-    concat_annotations,
-    fastq_enhance
-)
-
-from evaluate_support import (
-    fastq_to_table,
-    generate_summaries,
-    evaluate_clouds
-)
-
+import assembly_support
+import evaluate_support 
 
 @click.group()
 def main():

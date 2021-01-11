@@ -130,8 +130,8 @@ class Single_Enhanced_FastQ(luigi.Task):
         return luigi.LocalTarget(djoin(gp.read_dir, '.'.join([gp.final_prefix, self.direction, 'fastq'])))
 
     def run(self): 
-        fastq_enhance(djoin(gp.read_dir, '.'.join([gp.base_prefix + '_' + gp.sort_prefix, self.direction, 'fastq'])), self.enh_csv, gp.read_dir, gp.final_prefix) 
-        # TODO Does this work to call external function with options? 
+        fastq_enhance(djoin(gp.read_dir, '.'.join([gp.base_prefix + '_' + gp.sort_prefix, self.direction, 'fastq'])), self.enh_csv, gp.enhd_cld_dir, gp.final_prefix) 
+        barcode_sorter(djoin(gp.enhd_cld_dir, '.'.join([gp.base_prefix + '_bwt', self.direction, 'fastq'])), gp.read_dir, False)
 
 
 class Enhance_Original_FastQs(luigi.Task):
@@ -168,10 +168,11 @@ class Single_FastQ_to_Table(luigi.Task):
     direction = luigi.Parameter()
 
     def output(self):
-        return luigi.LocalTarget(djoin(gp.analyses_dir, basename(self.sorted_fastq).replace('fastq', 'csv')))
+        return luigi.LocalTarget(djoin(gp.analyses_dir, '.'.join(['bwt', self.direction, 'csv'])))
 
     def run(self): 
         fastq_to_table(self.sorted_fastq, djoin(gp.enhd_cld_dir, '.'.join([gp.sort_prefix, self.direction, 'csv'])), gp.analyses_dir)
+        shutil.copy(basename(self.sorted_fastq).replace('fastq', 'csv'), self.output().path)
 
 
 class Summarize_FastQ_Statistics(luigi.Task):
@@ -181,14 +182,14 @@ class Summarize_FastQ_Statistics(luigi.Task):
         return Enhance_Original_FastQs()
 
     def output(self):
-        return luigi.LocalTarget(djoin(gp.analyses_dir, gp.final_prefix + '.statistics.csv'))
+        return luigi.LocalTarget(djoin(gp.analyses_dir, 'bwt.statistics.csv'))
 
     def run(self):
         # Match predicted read clouds to actual (reference sequence) read clouds
         fastq_tbls = []
         for i, j in enumerate(['R1','R2']):
             yield Single_FastQ_to_Table(sorted_fastq = self.input()[i].path, direction = j)
-            fastq_tbls.append(djoin(gp.analyses_dir, '.'.join([gp.final_prefix, j, 'csv'])))
+            fastq_tbls.append(djoin(gp.analyses_dir, '.'.join(['bwt', j, 'csv'])))
         # Generate read cloud quality statistics tables 
         generate_summaries(fastq_tbls[0], fastq_tbls[1], None, gp.analyses_dir)
 
@@ -227,7 +228,7 @@ class Global_Parameters:
         self.read_dir = read_dir
         self.work_dir = check_make(master_dir, prefix + '_bwt')
         self.base_prefix = prefix
-        self.final_prefix = prefix + '_bwt'
+        self.final_prefix = prefix + '_bwt_bsort'
         self.num_threads = num_threads
         self.orig_map_dir = check_make(self.work_dir, 'original_mapping')
         self.enhd_cld_dir = check_make(self.work_dir, 'enhanced_clouds')

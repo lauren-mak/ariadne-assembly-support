@@ -193,7 +193,7 @@ def add_barcodes(fastq, annot_csv, outdir):
                     read2bc[name_components[0]] = name_components[1].split(':')[2].split('-')[0]
                 else:
                     read2bc[name_components[0]] = 'None'
-            if (i % 100000) == 0:
+            if (i % 10000000) == 0:
                 logger(f'Finished processing {i} lines')
     df = pd.read_csv(annot_csv)
     logger(f'Adding barcodes to the read mapping information')
