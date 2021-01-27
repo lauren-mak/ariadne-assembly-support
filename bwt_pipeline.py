@@ -172,7 +172,6 @@ class Single_FastQ_to_Table(luigi.Task):
 
     def run(self): 
         fastq_to_table(self.sorted_fastq, djoin(gp.enhd_cld_dir, '.'.join([gp.sort_prefix, self.direction, 'csv'])), gp.analyses_dir)
-        shutil.copy(basename(self.sorted_fastq).replace('fastq', 'csv'), self.output().path)
 
 
 class Summarize_FastQ_Statistics(luigi.Task):

@@ -98,11 +98,11 @@ def fastq_to_table(fastq, mapping_tbl, outdir):
 @main.command('generate_summaries')
 @click.argument('forward_tbl') # Forward FastQ table
 @click.argument('reverse_tbl') # Reverse FastQ table 
-@click.argument('id_csv') # Acccesion ID to reference sequence name  
 @click.argument('outdir') # Analysis output directory
-def generate_summaries(forward_tbl, reverse_tbl, id_csv, outdir): 
+@click.option('-i', '--id_csv') # Acccesion ID to reference sequence name  
+def generate_summaries(forward_tbl, reverse_tbl, outdir, id_csv): 
     """Calculate summary statistics for each and across all enhanced read clouds using the matched enhanced-actual information above. Output are [barcode, enhanced_num, size, purity, entropy] and [barcode, enhanced_num, species list]"""
-    evaluate_support.generate_summaries(forward_tbl, reverse_tbl, id_csv, outdir)
+    evaluate_support.generate_summaries(forward_tbl, reverse_tbl, outdir, id_csv)
 
 
 @main.command('evaluate_clouds')
@@ -112,6 +112,15 @@ def generate_summaries(forward_tbl, reverse_tbl, id_csv, outdir):
 def evaluate_clouds(distances, prefixes, outdir):
     """Make summary graphs of the summary information table from generate_summaries()."""
     evaluate_support.evaluate_clouds(distances, prefixes, outdir)
+
+
+@main.command('pairwise_graph_align')
+@click.argument('fastg') # SPAdes-format assembly graph
+@click.argument('fasta') # FastA version of reads (names and sequences) 
+@click.argument('outdir') # Analysis output directory
+def pairwise_graph_align(fastg, fasta, outdir):
+    """Identify read cloud assembly graph alignments and pairwise differences."""
+    evaluate_support.pairwise_graph_align(fastg, fasta, outdir)
 
 
 if __name__ == '__main__':

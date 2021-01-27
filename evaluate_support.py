@@ -2,13 +2,15 @@
 from csv import reader, writer
 from collections import Counter
 from datetime import datetime
-from os.path import basename, join
+from os.path import basename, join, exists
+import subprocess
 from sys import stderr
 
 # Pandas and numpy for data manipulation
 import numpy as np
 import pandas as pd
 from math import log2, fabs
+from sklearn.metrics.pairwise import manhattan_distances
 
 # Matplotlib and colormaps for plotting
 import matplotlib as mpl
@@ -174,7 +176,7 @@ def dataset_summary(cloud_counts, prefix):
     # size_df.to_csv(outdir + '/' + prefix + '.dataset.csv', header = False)
 
 
-def generate_summaries(forward_tbl, reverse_tbl, id_csv, outdir): 
+def generate_summaries(forward_tbl, reverse_tbl, outdir, id_csv): 
     """Calculate summary statistics for each and across all enhanced read clouds using the matched enhanced-actual information above. Output are [barcode, enhanced_num, size, purity, entropy] and [barcode, enhanced_num, species list]"""
     logger('Loading forward FastQ information')
     forward_lst = load_tbl(forward_tbl)
@@ -269,9 +271,9 @@ def make_secondary_graphs(param_list, distances, param_name, outdir):
     cmap = cm.Set2(np.linspace(0, 1, len(param_list)))
 
     param_std = list(map(lambda lst: np.std(lst), param_list))
-    y_error = [np.subtract(param_list, param_std), np.add(param_list, param_std)]
+    # y_error = [np.subtract(param_list, param_std), np.add(param_list, param_std)]
     
-    plt.bar(distances, param_list, yerr = y_error, color = cmap)
+    plt.bar(distances, param_list, color = cmap) # yerr = y_error, 
     plt.xlabel('Search Distance')
     plt.ylabel(param_name)
     param2strng = param_name.replace(' ', '_').replace('.', '')
@@ -283,7 +285,7 @@ def make_secondary_graphs(param_list, distances, param_name, outdir):
 def evaluate_clouds(distances, prefixes, outdir):
     """Make summary graphs of the summary information table from generate_summaries()."""
     start_time = datetime.now()
-    click.echo(f'Generating summary statistics for search distances {distances} of the dataset {"_".join(outdir.split("_")[:-1])}', err=True)
+    logger(f'Generating summary statistics for search distances {distances} of the dataset {"_".join(outdir.split("_")[:-1])}')
 
     search_distances = distances.split(',')
     file_prefixes = prefixes.split(',')
@@ -312,4 +314,82 @@ def evaluate_clouds(distances, prefixes, outdir):
     avg_cloud_entropy = list(map(lambda df: np.mean(df['Entropy']), all_df_list))
     make_secondary_graphs(avg_cloud_entropy, search_distances, 'Avg. Cloud Entropy.', outdir)
     logger('Finished the accessory graphs')
+
+
+def pairwise_graph_align(fastg, fasta, outdir):
+    """Identify read cloud assembly graph alignments and pairwise differences."""
+
+    # Map all reads to assembly graph
+    prefix = join(outdir, basename(fastg).split('.')[0])
+    if not exists(prefix + '.tsv'):
+        subprocess.run(['/Users/laurenmak/Programs/Bandage_Mac_v0_8_1/Bandage.app/Contents/MacOS/Bandage', 'querypaths', fastg, fasta, prefix])
+
+    # Match the read sequence to the read cloud number
+    seq_to_cld_num = {} # Sequence instead of read name because paired-end file
+    with open(fasta, 'r') as f:
+        for i, l in enumerate(f): 
+            if (i % 2 == 0): 
+                cld_num = l.strip()[-1] # >MN00867:6:000H2J7M3:1:22110:23088:18151 BX:Z:GGATTTATGTTTGAATGG-4
+            else: 
+                seq_to_cld_num[l.strip()] = cld_num
+    logger(f'Finished loading read cloud numbers from {fasta}')
+    
+    # Match Path information to read cloud (fragment) number
+    bandage_tbl = pd.read_csv(prefix + '.tsv', header = 0, sep = '\t')
+    clean_lst = [s.replace('(', '').replace(')', '').replace('+', '').replace('-', '').split() for s in bandage_tbl['Path'].tolist()] # Clean and split Path info into [[start,node_name,end]]
+    seq_lst = bandage_tbl['Sequence'].tolist() # Extract only alignment into
+    for i, s in enumerate(seq_lst):
+        clean_lst[i] = [seq_to_cld_num[s]] + clean_lst[i] # [[cld_num,start,node_name,end]]
+    clean_df = pd.DataFrame(clean_lst, columns = ['Cloud_Num', 'Start', 'Node', 'End'])
+    logger(f'There are {len(clean_df)} read-graph alignments in total')
+
+    # Match overlapping nodes to each other
+    node_to_node = {}
+    with open(fastg, 'r') as fg:
+        for i, l in enumerate(fg): 
+            if (i % 2 == 0) and (':' in l): # Two nodes that overlap
+                edge_ids = l.split('_') # Node name at indices 1, 6
+                if edge_ids[1] not in node_to_node:
+                    node_to_node[edge_ids[1]] = []
+                node_to_node[edge_ids[1]].append(edge_ids[6])
+    logger(f'Finished extracting {len(node_to_node)} edge overlaps from {fastg}')
+
+    # For each (fragment) read cloud, count the number of aligned and contiguous nodes. Output the summary information for each fragment.
+    aln_nodes = clean_df.Node.unique().tolist()
+    fragments = clean_df.Cloud_Num.unique().tolist()
+    aln_df = pd.DataFrame(0, index = fragments, columns = aln_nodes)
+    ctg_dct = {}
+    for i, f in enumerate(fragments):
+        fragment_df = clean_df.loc[clean_df['Cloud_Num'] == f]
+        frag_lst = []
+        frag_aln_nodes = fragment_df.Node.unique().tolist()
+        frag_ctg_nodes = []
+        for j, a in enumerate(aln_nodes):
+            if a in frag_aln_nodes:
+                node_df = fragment_df.loc[fragment_df['Node'] == a]
+                min_start = int(min(node_df['Start']))
+                max_end = int(max(node_df['End']))
+                frag_lst.append([a, len(node_df), min_start, max_end, max_end - min_start + 1, '|'.join(node_to_node[a])])
+                frag_ctg_nodes += node_to_node[a]
+                aln_df.iloc[i,j] = len(node_df)
+        ctg_dct[f] = dict(Counter(frag_ctg_nodes))
+        pd.DataFrame(frag_lst, columns = ['Node', 'Num_Reads', 'Start', 'End', 'Distance', 'Contiguous_Nodes']).to_csv('.'.join([prefix, f, 'csv']))
+        logger(f'{f}th read cloud: {len(fragment_df)} reads, {len(frag_aln_nodes)} unique aligned edges, {len(ctg_dct)} unique contiguous edges')
+
+    # Pairwise comparison between i) aligned...
+    logger(f'Pairwise comparison between aligned edges')
+    aln_df.to_csv('.'.join([prefix, 'aln', 'csv']))
+    pd.DataFrame(manhattan_distances(aln_df), index = aln_df.index.values, columns = aln_df.index.values).to_csv('.'.join([prefix, 'pairwise_aln', 'csv']))
+
+    # ...and ii) aligned + contiguous nodes.
+    logger(f'Pairwise comparison between all (aligned + contiguous) edges')
+    ctg_df = pd.DataFrame.from_dict(ctg_dct, orient = 'index') 
+    ctg_df.fillna(value = 0, inplace = True)
+    ctg_nodes = ctg_df.columns.values.tolist()
+    for i in set(aln_nodes) & set(ctg_nodes):
+        aln_df[i] += ctg_df[i]
+        del ctg_df[i]
+    aln_df = pd.concat([aln_df, ctg_df], axis = 1).astype(int) 
+    aln_df.to_csv('.'.join([prefix, 'all', 'csv']))
+    pd.DataFrame(manhattan_distances(aln_df), index = aln_df.index.values, columns = aln_df.index.values).to_csv('.'.join([prefix, 'pairwise_all', 'csv']))
 
