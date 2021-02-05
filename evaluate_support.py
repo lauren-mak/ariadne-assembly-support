@@ -316,38 +316,43 @@ def evaluate_clouds(distances, prefixes, outdir):
     logger('Finished the accessory graphs')
 
 
-def pairwise_graph_align(fastg, fasta, outdir):
-    """Identify read cloud assembly graph alignments and pairwise differences."""
-
-    # Map all reads to assembly graph
-    prefix = join(outdir, basename(fastg).split('.')[0])
+def map_read_clouds(fg, prefix, fa, seq_to_cld_num):
     if not exists(prefix + '.tsv'):
-        subprocess.run(['/Users/laurenmak/Programs/Bandage_Mac_v0_8_1/Bandage.app/Contents/MacOS/Bandage', 'querypaths', fastg, fasta, prefix])
+        subprocess.run(['/Users/laurenmak/Programs/Bandage_Mac_v0_8_1/Bandage.app/Contents/MacOS/Bandage', 'querypaths', fg, fa, prefix])
 
-    # Match the read sequence to the read cloud number
-    seq_to_cld_num = {} # Sequence instead of read name because paired-end file
-    with open(fasta, 'r') as f:
-        for i, l in enumerate(f): 
-            if (i % 2 == 0): 
-                cld_num = l.strip()[-1] # >MN00867:6:000H2J7M3:1:22110:23088:18151 BX:Z:GGATTTATGTTTGAATGG-4
-            else: 
-                seq_to_cld_num[l.strip()] = cld_num
-    logger(f'Finished loading read cloud numbers from {fasta}')
-    
     # Match Path information to read cloud (fragment) number
     bandage_tbl = pd.read_csv(prefix + '.tsv', header = 0, sep = '\t')
     clean_lst = [s.replace('(', '').replace(')', '').replace('+', '').replace('-', '').split() for s in bandage_tbl['Path'].tolist()] # Clean and split Path info into [[start,node_name,end]]
-    seq_lst = bandage_tbl['Sequence'].tolist() # Extract only alignment into
-    for i, s in enumerate(seq_lst):
-        clean_lst[i] = [seq_to_cld_num[s]] + clean_lst[i] # [[cld_num,start,node_name,end]]
-    clean_df = pd.DataFrame(clean_lst, columns = ['Cloud_Num', 'Start', 'Node', 'End'])
+    name_list = bandage_tbl['Query'].tolist() # Extract only alignment into
+    full_read_seqs = seq_to_cld_num.keys()
+    for i, n in enumerate(name_list):
+        clean_lst[i] = [seq_to_cld_num[n]] + clean_lst[i] # [[cld_num,start,node_name,end]]
+    return pd.DataFrame(clean_lst, columns = ['Cloud_Num', 'Start', 'Node', 'End'])
+
+
+def pairwise_graph_align(fastg, fasta_prefix, outdir):
+    """Identify read cloud assembly graph alignments and pairwise differences."""
+
+    # Match the read sequence to the read cloud number
+    seq_to_cld_num = {} # Sequence instead of read name because paired-end file
+    with open(fasta_prefix + '.R1.fasta', 'r') as f:
+        for i, l in enumerate(f): 
+            if (i % 2 == 0):  # >MN00867:6:000H2J7M3:1:22110:23088:18151 BX:Z:GGATTTATGTTTGAATGG-4
+                seq_to_cld_num[l.split()[0][1:]] = l.strip()[-1] # {seq:cld_num}
+    logger(f'Finished loading read cloud numbers from {fasta_prefix + ".R1.fasta"}')
+
+    # Map all reads to assembly graph
+    prefix = join(outdir, basename(fastg).split('.')[0])
+    r1_clean_df = map_read_clouds(fastg, prefix + '.R1', fasta_prefix + '.R1.fasta', seq_to_cld_num)
+    r2_clean_df = map_read_clouds(fastg, prefix + '.R2', fasta_prefix + '.R2.fasta', seq_to_cld_num)
+    clean_df = pd.concat([r1_clean_df, r2_clean_df])
     logger(f'There are {len(clean_df)} read-graph alignments in total')
 
     # Match overlapping nodes to each other
     node_to_node = {}
     with open(fastg, 'r') as fg:
         for i, l in enumerate(fg): 
-            if (i % 2 == 0) and (':' in l): # Two nodes that overlap
+            if ':' in l: # Two nodes that overlap
                 edge_ids = l.split('_') # Node name at indices 1, 6
                 if edge_ids[1] not in node_to_node:
                     node_to_node[edge_ids[1]] = []
@@ -357,6 +362,7 @@ def pairwise_graph_align(fastg, fasta, outdir):
     # For each (fragment) read cloud, count the number of aligned and contiguous nodes. Output the summary information for each fragment.
     aln_nodes = clean_df.Node.unique().tolist()
     fragments = clean_df.Cloud_Num.unique().tolist()
+    frag_df_lst = []
     aln_df = pd.DataFrame(0, index = fragments, columns = aln_nodes)
     ctg_dct = {}
     for i, f in enumerate(fragments):
@@ -369,17 +375,24 @@ def pairwise_graph_align(fastg, fasta, outdir):
                 node_df = fragment_df.loc[fragment_df['Node'] == a]
                 min_start = int(min(node_df['Start']))
                 max_end = int(max(node_df['End']))
-                frag_lst.append([a, len(node_df), min_start, max_end, max_end - min_start + 1, '|'.join(node_to_node[a])])
+                frag_lst.append([a, len(node_df), min_start, max_end, max_end - min_start + 1, '/'.join(node_to_node[a])])
                 frag_ctg_nodes += node_to_node[a]
                 aln_df.iloc[i,j] = len(node_df)
         ctg_dct[f] = dict(Counter(frag_ctg_nodes))
-        pd.DataFrame(frag_lst, columns = ['Node', 'Num_Reads', 'Start', 'End', 'Distance', 'Contiguous_Nodes']).to_csv('.'.join([prefix, f, 'csv']))
-        logger(f'{f}th read cloud: {len(fragment_df)} reads, {len(frag_aln_nodes)} unique aligned edges, {len(ctg_dct)} unique contiguous edges')
+        frag_df_lst.append(pd.DataFrame(frag_lst, index = [f] * len(frag_lst), columns = ['Node', 'Num_Reads', 'Start', 'End', 'Distance', 'Contiguous_Nodes']))
+        logger(f'{f}th read cloud: {len(fragment_df)} reads, {len(frag_aln_nodes)} unique aligned edges, {len(ctg_dct[f])} unique contiguous edges')
+    pd.concat(frag_df_lst).to_csv('.'.join([prefix, 'edges', 'csv']))
 
     # Pairwise comparison between i) aligned...
     logger(f'Pairwise comparison between aligned edges')
     aln_df.to_csv('.'.join([prefix, 'aln', 'csv']))
-    pd.DataFrame(manhattan_distances(aln_df), index = aln_df.index.values, columns = aln_df.index.values).to_csv('.'.join([prefix, 'pairwise_aln', 'csv']))
+    aln_dist = pd.DataFrame(manhattan_distances(aln_df), index = aln_df.index.values, columns = aln_df.index.values)
+    scaled_aln_dist = aln_dist
+    for i in range(len(fragments)):
+        for j in range(len(fragments)):
+            scaled_aln_dist.iloc[i,j] = aln_dist.iloc[i,j] / ( sum(aln_df.iloc[i,:]) + sum(aln_df.iloc[j,:]) )
+        # scaled_aln_dist.iloc[i,:] = aln_dist.iloc[i,:] / sum(aln_df.iloc[i,:])
+    scaled_aln_dist.to_csv('.'.join([prefix, 'pairwise_aln', 'csv']))
 
     # ...and ii) aligned + contiguous nodes.
     logger(f'Pairwise comparison between all (aligned + contiguous) edges')
@@ -391,5 +404,11 @@ def pairwise_graph_align(fastg, fasta, outdir):
         del ctg_df[i]
     aln_df = pd.concat([aln_df, ctg_df], axis = 1).astype(int) 
     aln_df.to_csv('.'.join([prefix, 'all', 'csv']))
-    pd.DataFrame(manhattan_distances(aln_df), index = aln_df.index.values, columns = aln_df.index.values).to_csv('.'.join([prefix, 'pairwise_all', 'csv']))
+    aln_ctg_dist = pd.DataFrame(manhattan_distances(aln_df), index = aln_df.index.values, columns = aln_df.index.values)
+    scaled_aln_ctg_dist = aln_ctg_dist
+    for i in range(len(fragments)):
+        for j in range(len(fragments)):
+            scaled_aln_ctg_dist.iloc[i,j] = aln_ctg_dist.iloc[i,j] / ( sum(aln_df.iloc[i,:]) + sum(aln_df.iloc[j,:]) )
+        # scaled_aln_ctg_dist.iloc[i,:] = aln_ctg_dist.iloc[i,:] / sum(aln_df.iloc[i,:])
+    scaled_aln_ctg_dist.to_csv('.'.join([prefix, 'pairwise_all', 'csv']))
 
