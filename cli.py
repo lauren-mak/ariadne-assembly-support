@@ -119,7 +119,7 @@ def evaluate_clouds(distances, prefixes, outdir):
 @click.argument('fastg') # SPAdes-format assembly graph
 @click.argument('fasta') # FastA version of reads (names and sequences) 
 @click.argument('outdir') # Analysis output directory
-@click.option('--depth', '-d', type = int, default = 2) # Number of edges deep to search
+@click.option('--depth', '-d', type = int, default = 4) # Number of edges deep to search
 def pairwise_graph_align(fastg, fasta, outdir, depth):
     """Identify read cloud assembly graph alignments and pairwise differences."""
     evaluate_support.pairwise_graph_align(fastg, fasta, outdir, depth)

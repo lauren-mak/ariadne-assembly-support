@@ -330,15 +330,16 @@ def map_read_clouds(fg, prefix, fa, seq_to_cld_num):
     return pd.DataFrame(clean_lst, columns = ['Cloud_Num', 'Start', 'Node', 'End'])
 
 
-def depth_based_search(a, d, node_to_node):
+def depth_based_search(a, d, node_to_node, existing_edges):
     connected_edges = node_to_node[a]
     if d is 0 or len(connected_edges) is 0: return [] 
-    contiguous_edges = connected_edges
-    print(f'{a} {d} {contiguous_edges}')
+    contiguous_edges = existing_edges + connected_edges
+    # print(f'{a} {d} {contiguous_edges}')
     for b in connected_edges:
-        contiguous_edges += depth_based_search(b, d - 1, node_to_node)
+        if b not in existing_edges:
+            contiguous_edges += depth_based_search(b, d - 1, node_to_node, contiguous_edges)
     cleaned_edge_lst = list(set(contiguous_edges))
-    print(f'{a} {d} {cleaned_edge_lst}')
+    # print(f'{a} {d} {cleaned_edge_lst}')
     return cleaned_edge_lst
 
 
@@ -387,7 +388,7 @@ def pairwise_graph_align(fastg, fasta_prefix, outdir, depth):
                 node_df = fragment_df.loc[fragment_df['Node'] == a]
                 min_start = int(min(node_df['Start']))
                 max_end = int(max(node_df['End']))
-                contiguous_edges = depth_based_search(a, depth, node_to_node)
+                contiguous_edges = depth_based_search(a, depth, node_to_node, [])
                 frag_lst.append([a, len(node_df), min_start, max_end, max_end - min_start + 1, '/'.join(contiguous_edges)])
                 frag_ctg_nodes += contiguous_edges
                 aln_df.iloc[i,j] = len(node_df)
@@ -415,7 +416,7 @@ def pairwise_graph_align(fastg, fasta_prefix, outdir, depth):
     for i in set(aln_nodes) & set(ctg_nodes):
         aln_df[i] += ctg_df[i]
         del ctg_df[i]
-    aln_df = pd.concat([aln_df, ctg_df], axis = 1).astype(int) 
+    aln_df = pd.concat([aln_df, ctg_df], axis = 1, sort = True).astype(int) 
     aln_df.to_csv('.'.join([prefix, 'all', 'csv']))
     aln_ctg_dist = pd.DataFrame(manhattan_distances(aln_df), index = aln_df.index.values, columns = aln_df.index.values)
     scaled_aln_ctg_dist = aln_ctg_dist
