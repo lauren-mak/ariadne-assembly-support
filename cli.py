@@ -30,9 +30,10 @@ Support Functions for Ariadne
 @click.argument('original_fq') # FastQ file with original read clouds
 @click.argument('enhanced_fq') # FastQ file with enhanced read clouds
 @click.argument('full_fq') # Output FastQ file with missing unbarcoded reads
-def complete_reads(original_fq, enhanced_fq, full_fq):
+@click.argument('depth') # Number of edges to search
+def complete_reads(original_fq, enhanced_fq, full_fq, depth):
     """Adds reads missing from the enhanced FastQs based on the total set of reads in the original FastQs."""
-    assembly_support.complete_reads(original_fq, enhanced_fq, full_fq)
+    assembly_support.complete_reads(original_fq, enhanced_fq, full_fq, depth)
 
 
 """
@@ -118,9 +119,10 @@ def evaluate_clouds(distances, prefixes, outdir):
 @click.argument('fastg') # SPAdes-format assembly graph
 @click.argument('fasta') # FastA version of reads (names and sequences) 
 @click.argument('outdir') # Analysis output directory
-def pairwise_graph_align(fastg, fasta, outdir):
+@click.option('--depth', '-d', type = int, default = 2) # Number of edges deep to search
+def pairwise_graph_align(fastg, fasta, outdir, depth):
     """Identify read cloud assembly graph alignments and pairwise differences."""
-    evaluate_support.pairwise_graph_align(fastg, fasta, outdir)
+    evaluate_support.pairwise_graph_align(fastg, fasta, outdir, depth)
 
 
 if __name__ == '__main__':

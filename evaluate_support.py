@@ -330,7 +330,19 @@ def map_read_clouds(fg, prefix, fa, seq_to_cld_num):
     return pd.DataFrame(clean_lst, columns = ['Cloud_Num', 'Start', 'Node', 'End'])
 
 
-def pairwise_graph_align(fastg, fasta_prefix, outdir):
+def depth_based_search(a, d, node_to_node):
+    connected_edges = node_to_node[a]
+    if d is 0 or len(connected_edges) is 0: return [] 
+    contiguous_edges = connected_edges
+    print(f'{a} {d} {contiguous_edges}')
+    for b in connected_edges:
+        contiguous_edges += depth_based_search(b, d - 1, node_to_node)
+    cleaned_edge_lst = list(set(contiguous_edges))
+    print(f'{a} {d} {cleaned_edge_lst}')
+    return cleaned_edge_lst
+
+
+def pairwise_graph_align(fastg, fasta_prefix, outdir, depth):
     """Identify read cloud assembly graph alignments and pairwise differences."""
 
     # Match the read sequence to the read cloud number
@@ -375,8 +387,9 @@ def pairwise_graph_align(fastg, fasta_prefix, outdir):
                 node_df = fragment_df.loc[fragment_df['Node'] == a]
                 min_start = int(min(node_df['Start']))
                 max_end = int(max(node_df['End']))
-                frag_lst.append([a, len(node_df), min_start, max_end, max_end - min_start + 1, '/'.join(node_to_node[a])])
-                frag_ctg_nodes += node_to_node[a]
+                contiguous_edges = depth_based_search(a, depth, node_to_node)
+                frag_lst.append([a, len(node_df), min_start, max_end, max_end - min_start + 1, '/'.join(contiguous_edges)])
+                frag_ctg_nodes += contiguous_edges
                 aln_df.iloc[i,j] = len(node_df)
         ctg_dct[f] = dict(Counter(frag_ctg_nodes))
         frag_df_lst.append(pd.DataFrame(frag_lst, index = [f] * len(frag_lst), columns = ['Node', 'Num_Reads', 'Start', 'End', 'Distance', 'Contiguous_Nodes']))
