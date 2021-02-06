@@ -15,7 +15,7 @@ General FastQ Preprocessing Functions
 @main.command('barcode_sorter')
 @click.argument('in_fq') # FastQ file with original read clouds
 @click.argument('outdir') 
-@click.option('--cloud-sizes', flag_value=True)
+@click.option('--cloud-sizes', flag_value = True)
 def barcode_sorter(in_fq, outdir, cloud_sizes):
     """Sorts FastQ reads based on their barcode and cloud number. Tags barcoded reads with '-1' if not already there. Must be used at the end of any enhancement workflow and/or before usage in cloudSPAdes."""
     assembly_support.barcode_sorter(in_fq, outdir, cloud_sizes)
@@ -119,10 +119,12 @@ def evaluate_clouds(distances, prefixes, outdir):
 @click.argument('fastg') # SPAdes-format assembly graph
 @click.argument('fasta') # FastA version of reads (names and sequences) 
 @click.argument('outdir') # Analysis output directory
-@click.option('--depth', '-d', type = int, default = 4) # Number of edges deep to search
-def pairwise_graph_align(fastg, fasta, outdir, depth):
+@click.option('--depth', '-d', type = int, default = 6) # Number of edges deep to search
+@click.option('--fragment-mode', '-f', flag_value = True)
+@click.option('--aligned-only', '-a', flag_value = True)
+def pairwise_graph_align(fastg, fasta, outdir, depth, fragment_mode, aligned_only):
     """Identify read cloud assembly graph alignments and pairwise differences."""
-    evaluate_support.pairwise_graph_align(fastg, fasta, outdir, depth)
+    evaluate_support.pairwise_graph_align(fastg, fasta, outdir, depth, fragment_mode, aligned_only)
 
 
 if __name__ == '__main__':

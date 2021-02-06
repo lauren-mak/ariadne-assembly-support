@@ -330,6 +330,65 @@ def map_read_clouds(fg, prefix, fa, seq_to_cld_num):
     return pd.DataFrame(clean_lst, columns = ['Cloud_Num', 'Start', 'Node', 'End'])
 
 
+def fragment_comparison(clean_df, node_to_node, depth, prefix):
+    aln_nodes = clean_df.Node.unique().tolist()
+    fragments = clean_df.Cloud_Num.unique().tolist()
+    frag_df_lst = []
+    aln_df = pd.DataFrame(0, index = fragments, columns = aln_nodes)
+    ctg_dct = {}
+    for i, f in enumerate(fragments):
+        fragment_df = clean_df.loc[clean_df['Cloud_Num'] == f]
+        frag_lst = []
+        frag_aln_nodes = fragment_df.Node.unique().tolist()
+        frag_ctg_nodes = []
+        for j, a in enumerate(aln_nodes):
+            if a in frag_aln_nodes:
+                node_df = fragment_df.loc[fragment_df['Node'] == a]
+                min_start = int(min(node_df['Start']))
+                max_end = int(max(node_df['End']))
+                contiguous_edges = depth_based_search(a, depth, node_to_node, [])
+                frag_lst.append([a, len(node_df), min_start, max_end, max_end - min_start + 1, len(contiguous_edges), '/'.join(contiguous_edges)])
+                frag_ctg_nodes += contiguous_edges
+                aln_df.iloc[i,j] = len(node_df)
+        ctg_dct[f] = dict(Counter(frag_ctg_nodes))
+        frag_df_lst.append(pd.DataFrame(frag_lst, index = [f] * len(frag_lst), columns = ['Node', 'Num_Reads', 'Start', 'End', 'Distance', 'Num_Contig_Nodes', 'Contiguous_Nodes']))
+        logger(f'{f}th read cloud: {len(fragment_df)} reads, {len(frag_aln_nodes)} unique aligned edges, {len(ctg_dct[f])} unique contiguous edges')
+    pd.concat(frag_df_lst).to_csv('.'.join([prefix, 'edges', 'csv']))
+    return aln_df, ctg_dct
+
+
+def edge_comparison(clean_df, node_to_node, depth, prefix):
+    aln_nodes = clean_df.Node.unique().tolist()
+    fragments = clean_df.Cloud_Num.unique().tolist()
+    edge_lst = []
+    frag_name_lst = []
+    aln_ctg_df_lst = []
+    for i, f in enumerate(fragments):
+        fragment_df = clean_df.loc[clean_df['Cloud_Num'] == f]
+        frag_aln_nodes = fragment_df.Node.unique().tolist()
+        for j, a in enumerate(aln_nodes):
+            if a in frag_aln_nodes:
+                node_df = fragment_df.loc[fragment_df['Node'] == a]
+                min_start = int(min(node_df['Start']))
+                max_end = int(max(node_df['End']))
+                contiguous_edges = depth_based_search(a, depth, node_to_node, [])
+                edge_name = '-'.join([f,a])
+                edge_lst.append([len(node_df), min_start, max_end, max_end - min_start + 1, len(contiguous_edges), '/'.join(contiguous_edges)])
+                frag_name_lst.append(edge_name)
+                aln_ctg_dct = dict(Counter(contiguous_edges)) # Contiguous edges only
+                if a in aln_ctg_dct:
+                    aln_ctg_dct[a] += len(node_df)
+                else:
+                    aln_ctg_dct[a] = len(node_df)
+                # aln_ctg_df_lst.append(pd.DataFrame.from_dict(aln_ctg_dct))
+                aln_ctg_df_lst.append(pd.DataFrame([aln_ctg_dct.values()], index = [edge_name], columns = aln_ctg_dct.keys()))
+        logger(f'{f}th read cloud: {len(fragment_df)} reads, {len(frag_aln_nodes)} unique aligned edges')
+    pd.DataFrame(edge_lst, index = frag_name_lst, columns = ['Num_Reads', 'Start', 'End', 'Distance', 'Num_Contig_Nodes', 'Contiguous_Nodes']).to_csv('.'.join([prefix, 'edges', 'csv']))
+    aln_df = pd.concat(aln_ctg_df_lst, axis = 0, sort = True)
+    aln_df.fillna(value = 0, inplace = True)
+    return aln_df.astype(int) 
+
+
 def depth_based_search(a, d, node_to_node, existing_edges):
     connected_edges = node_to_node[a]
     if d is 0 or len(connected_edges) is 0: return [] 
@@ -343,7 +402,7 @@ def depth_based_search(a, d, node_to_node, existing_edges):
     return cleaned_edge_lst
 
 
-def pairwise_graph_align(fastg, fasta_prefix, outdir, depth):
+def pairwise_graph_align(fastg, fasta_prefix, outdir, depth, fragment_mode, aligned_only):
     """Identify read cloud assembly graph alignments and pairwise differences."""
 
     # Match the read sequence to the read cloud number
@@ -373,55 +432,37 @@ def pairwise_graph_align(fastg, fasta_prefix, outdir, depth):
     logger(f'Finished extracting {len(node_to_node)} edge overlaps from {fastg}')
 
     # For each (fragment) read cloud, count the number of aligned and contiguous nodes. Output the summary information for each fragment.
-    aln_nodes = clean_df.Node.unique().tolist()
     fragments = clean_df.Cloud_Num.unique().tolist()
-    frag_df_lst = []
-    aln_df = pd.DataFrame(0, index = fragments, columns = aln_nodes)
-    ctg_dct = {}
-    for i, f in enumerate(fragments):
-        fragment_df = clean_df.loc[clean_df['Cloud_Num'] == f]
-        frag_lst = []
-        frag_aln_nodes = fragment_df.Node.unique().tolist()
-        frag_ctg_nodes = []
-        for j, a in enumerate(aln_nodes):
-            if a in frag_aln_nodes:
-                node_df = fragment_df.loc[fragment_df['Node'] == a]
-                min_start = int(min(node_df['Start']))
-                max_end = int(max(node_df['End']))
-                contiguous_edges = depth_based_search(a, depth, node_to_node, [])
-                frag_lst.append([a, len(node_df), min_start, max_end, max_end - min_start + 1, '/'.join(contiguous_edges)])
-                frag_ctg_nodes += contiguous_edges
-                aln_df.iloc[i,j] = len(node_df)
-        ctg_dct[f] = dict(Counter(frag_ctg_nodes))
-        frag_df_lst.append(pd.DataFrame(frag_lst, index = [f] * len(frag_lst), columns = ['Node', 'Num_Reads', 'Start', 'End', 'Distance', 'Contiguous_Nodes']))
-        logger(f'{f}th read cloud: {len(fragment_df)} reads, {len(frag_aln_nodes)} unique aligned edges, {len(ctg_dct[f])} unique contiguous edges')
-    pd.concat(frag_df_lst).to_csv('.'.join([prefix, 'edges', 'csv']))
-
-    # Pairwise comparison between i) aligned...
-    logger(f'Pairwise comparison between aligned edges')
-    aln_df.to_csv('.'.join([prefix, 'aln', 'csv']))
-    aln_dist = pd.DataFrame(manhattan_distances(aln_df), index = aln_df.index.values, columns = aln_df.index.values)
-    scaled_aln_dist = aln_dist
-    for i in range(len(fragments)):
-        for j in range(len(fragments)):
-            scaled_aln_dist.iloc[i,j] = aln_dist.iloc[i,j] / ( sum(aln_df.iloc[i,:]) + sum(aln_df.iloc[j,:]) )
-        # scaled_aln_dist.iloc[i,:] = aln_dist.iloc[i,:] / sum(aln_df.iloc[i,:])
-    scaled_aln_dist.to_csv('.'.join([prefix, 'pairwise_aln', 'csv']))
+    if fragment_mode:
+        aln_df, ctg_dct = fragment_comparison(clean_df, node_to_node, depth, prefix)
+        if aligned_only:
+            # Pairwise comparison between i) aligned...
+            logger(f'Pairwise comparison between aligned edges')
+            aln_df.to_csv('.'.join([prefix, 'aln', 'csv']))
+            aln_dist = pd.DataFrame(manhattan_distances(aln_df), index = aln_df.index.values, columns = aln_df.index.values)
+            scaled_aln_dist = aln_dist
+            for i in range(len(fragments)):
+                for j in range(len(fragments)):
+                    scaled_aln_dist.iloc[i,j] = aln_dist.iloc[i,j] / ( sum(aln_df.iloc[i,:]) + sum(aln_df.iloc[j,:]) )
+                # scaled_aln_dist.iloc[i,:] = aln_dist.iloc[i,:] / sum(aln_df.iloc[i,:])
+            scaled_aln_dist.to_csv('.'.join([prefix, 'pairwise_aln', 'csv']))
+        ctg_df = pd.DataFrame.from_dict(ctg_dct, orient = 'index') 
+        ctg_df.fillna(value = 0, inplace = True)
+        ctg_nodes = ctg_df.columns.values.tolist()
+        for i in set(aln_nodes) & set(ctg_nodes):
+            aln_df[i] += ctg_df[i]
+            del ctg_df[i]
+        aln_df = pd.concat([aln_df, ctg_df], axis = 1, sort = True).astype(int) 
+    else:
+        aln_df = edge_comparison(clean_df, node_to_node, depth, prefix)
 
     # ...and ii) aligned + contiguous nodes.
     logger(f'Pairwise comparison between all (aligned + contiguous) edges')
-    ctg_df = pd.DataFrame.from_dict(ctg_dct, orient = 'index') 
-    ctg_df.fillna(value = 0, inplace = True)
-    ctg_nodes = ctg_df.columns.values.tolist()
-    for i in set(aln_nodes) & set(ctg_nodes):
-        aln_df[i] += ctg_df[i]
-        del ctg_df[i]
-    aln_df = pd.concat([aln_df, ctg_df], axis = 1, sort = True).astype(int) 
     aln_df.to_csv('.'.join([prefix, 'all', 'csv']))
     aln_ctg_dist = pd.DataFrame(manhattan_distances(aln_df), index = aln_df.index.values, columns = aln_df.index.values)
     scaled_aln_ctg_dist = aln_ctg_dist
-    for i in range(len(fragments)):
-        for j in range(len(fragments)):
+    for i in range(len(aln_ctg_dist)):
+        for j in range(len(aln_ctg_dist)):
             scaled_aln_ctg_dist.iloc[i,j] = aln_ctg_dist.iloc[i,j] / ( sum(aln_df.iloc[i,:]) + sum(aln_df.iloc[j,:]) )
         # scaled_aln_ctg_dist.iloc[i,:] = aln_ctg_dist.iloc[i,:] / sum(aln_df.iloc[i,:])
     scaled_aln_ctg_dist.to_csv('.'.join([prefix, 'pairwise_all', 'csv']))
