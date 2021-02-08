@@ -322,11 +322,26 @@ def map_read_clouds(fg, prefix, fa, seq_to_cld_num):
 
     # Match Path information to read cloud (fragment) number
     bandage_tbl = pd.read_csv(prefix + '.tsv', header = 0, sep = '\t')
-    clean_lst = [s.replace('(', '').replace(')', '').replace('+', '').replace('-', '').split() for s in bandage_tbl['Path'].tolist()] # Clean and split Path info into [[start,node_name,end]]
+    clean_lst = [] # [s.replace('(', '').replace(')', '').replace('+', '').replace('-', '').split() for s in bandage_tbl['Path'].tolist()] # Clean and split Path info into [[start,node_name,end]]
+    for r in bandage_tbl['Path'].tolist():
+        tmp = r.strip().split()
+        cleaned_info = []
+        if '(' not in tmp[0]:
+            cleaned_info.append(0)
+        else:
+            cleaned_info.append(tmp[0].replace('(', '').replace(')', ''))
+        cleaned_info.append(tmp[1].replace('+', '').replace('-', '').replace(',', ''))
+        if '(' not in tmp[-1]:
+            cleaned_info.append(0)
+        else:
+            cleaned_info.append(tmp[-1].replace('(', '').replace(')', ''))
+        clean_lst.append(cleaned_info)
     name_list = bandage_tbl['Query'].tolist() # Extract only alignment into
     full_read_seqs = seq_to_cld_num.keys()
     for i, n in enumerate(name_list):
         clean_lst[i] = [seq_to_cld_num[n]] + clean_lst[i] # [[cld_num,start,node_name,end]]
+        if len(clean_lst[i]) > 4: 
+            clean_lst[i] = clean_lst[i][0:3] + [clean_lst[i][-1]]
     return pd.DataFrame(clean_lst, columns = ['Cloud_Num', 'Start', 'Node', 'End'])
 
 
@@ -372,8 +387,8 @@ def edge_comparison(clean_df, node_to_node, depth, prefix):
                 min_start = int(min(node_df['Start']))
                 max_end = int(max(node_df['End']))
                 contiguous_edges = depth_based_search(a, depth, node_to_node, [])
-                edge_name = '-'.join([f,a])
-                edge_lst.append([len(node_df), min_start, max_end, max_end - min_start + 1, len(contiguous_edges), '/'.join(contiguous_edges)])
+                edge_name = '-'.join([str(f),str(a)])
+                edge_lst.append([len(node_df), min_start, max_end, max_end - min_start + 1, len(contiguous_edges), str(contiguous_edges)])
                 frag_name_lst.append(edge_name)
                 aln_ctg_dct = dict(Counter(contiguous_edges)) # Contiguous edges only
                 if a in aln_ctg_dct:
@@ -415,8 +430,8 @@ def pairwise_graph_align(fastg, fasta_prefix, outdir, depth, fragment_mode, alig
 
     # Map all reads to assembly graph
     prefix = join(outdir, basename(fastg).split('.')[0])
-    r1_clean_df = map_read_clouds(fastg, prefix + '.R1', fasta_prefix + '.R1.fasta', seq_to_cld_num)
-    r2_clean_df = map_read_clouds(fastg, prefix + '.R2', fasta_prefix + '.R2.fasta', seq_to_cld_num)
+    r1_clean_df = map_read_clouds(fastg, prefix + '.R1', fasta_prefix + '.R1.fasta', seq_to_cld_num).astype(int)
+    r2_clean_df = map_read_clouds(fastg, prefix + '.R2', fasta_prefix + '.R2.fasta', seq_to_cld_num).astype(int)
     clean_df = pd.concat([r1_clean_df, r2_clean_df])
     logger(f'There are {len(clean_df)} read-graph alignments in total')
 
@@ -424,11 +439,13 @@ def pairwise_graph_align(fastg, fasta_prefix, outdir, depth, fragment_mode, alig
     node_to_node = {}
     with open(fastg, 'r') as fg:
         for i, l in enumerate(fg): 
-            if ':' in l: # Two nodes that overlap
+            if '>' in l: # Two nodes that overlap
                 edge_ids = l.split('_') # Node name at indices 1, 6
-                if edge_ids[1] not in node_to_node:
-                    node_to_node[edge_ids[1]] = []
-                node_to_node[edge_ids[1]].append(edge_ids[6])
+                start_node = int(edge_ids[1])
+                if start_node not in node_to_node:
+                    node_to_node[start_node] = []
+                if ':' in l: # Two nodes that overlap
+                    node_to_node[start_node].append(int(edge_ids[6]))
     logger(f'Finished extracting {len(node_to_node)} edge overlaps from {fastg}')
 
     # For each (fragment) read cloud, count the number of aligned and contiguous nodes. Output the summary information for each fragment.
