@@ -30,21 +30,25 @@ def check_make(curr_dir, sub):
 
 
 class Single_Sort_FastQ(luigi.Task):
+    in_dir = luigi.Parameter()
+    prefix = luigi.Parameter()
     direction = luigi.Parameter()
+    enhance_mode = luigi.BoolParameter(parsing = luigi.BoolParameter.EXPLICIT_PARSING)
 
     def output(self):
-        return luigi.LocalTarget(djoin(gp.read_dir, '.'.join([gp.base_prefix + '_' + gp.sort_prefix, self.direction, 'fastq'])))
+        return luigi.LocalTarget(djoin(gp.read_dir, '.'.join([self.prefix + '_bsort', self.direction, 'fastq'])))
 
     def run(self):
-        print(djoin(gp.read_dir, '.'.join([gp.base_prefix, self.direction, 'fastq'])))
-        barcode_sorter(djoin(gp.read_dir, '.'.join([gp.base_prefix, self.direction, 'fastq'])), gp.read_dir, False)
+        if self.enhance_mode:
+            yield Single_Enhanced_FastQ(enh_csv = djoin(gp.enhd_cld_dir, '.'.join(['bsort', self.direction, 'csv'])), direction = self.direction)
+        barcode_sorter(djoin(self.in_dir, '.'.join([self.prefix, self.direction, 'fastq'])), gp.read_dir, False)
 
 
 class Sort_FastQs_by_Barcode(luigi.Task):
     """Sort raw barcoded reads by barcode."""
 
     def requires(self):
-        return [Single_Sort_FastQ(direction = 'R1'), Single_Sort_FastQ(direction = 'R2')]            
+        return [Single_Sort_FastQ(in_dir = gp.read_dir, prefix = gp.base_prefix, direction = 'R1', enhance_mode = False), Single_Sort_FastQ(in_dir = gp.read_dir, prefix = gp.base_prefix, direction = 'R2', enhance_mode = False)]
 
     def output(self): 
         return self.input()
@@ -54,24 +58,25 @@ class Map_Original_Clouds(luigi.Task):
     """Map barcoded reads to the metagenome and add barcode information."""
     reference = luigi.Parameter()
     ids_to_names = luigi.Parameter()
+    fragments = luigi.BoolParameter(parsing = luigi.BoolParameter.EXPLICIT_PARSING)
 
     def requires(self):
         return Sort_FastQs_by_Barcode()
 
     def output(self):
-        return luigi.LocalTarget(djoin(gp.work_dir, gp.sort_prefix + '.final.csv'))
+        return luigi.LocalTarget(djoin(gp.work_dir, 'bsort.final.csv'))
 
     def run(self):
-        raw_sam = djoin(gp.work_dir, gp.sort_prefix + '.sam')
-        raw_bam = djoin(gp.work_dir, gp.sort_prefix + '_raw.bam')
-        srt_bam = djoin(gp.work_dir, gp.sort_prefix + '.bam')
+        raw_sam = djoin(gp.work_dir, 'bsort.sam')
+        raw_bam = djoin(gp.work_dir, 'bsort_raw.bam')
+        srt_bam = djoin(gp.work_dir, 'bsort.bam')
 
         map_step = subprocess.run(['bowtie2', '--sensitive-local', '-p', gp.num_threads, '-x', self.reference, '-1', self.input()[0].path, '-2', self.input()[1].path, '-S', raw_sam])
         bam_step = subprocess.run(['samtools', 'view', '-hb', '-f', '0', '-F', '256', raw_sam, '-o', raw_bam]) # Primary alignments only
         srt_step = subprocess.run(['samtools', 'sort', raw_bam, '-o', srt_bam])
         idx_step = subprocess.run(['samtools', 'index', srt_bam])
-        bam_to_annotate(srt_bam, self.ids_to_names, gp.work_dir, '--est-fragments')
-        add_barcodes(self.input()[0].path, djoin(gp.work_dir, gp.sort_prefix + '.csv'), gp.work_dir)
+        bam_to_annotate(srt_bam, self.ids_to_names, gp.work_dir, self.fragments)
+        add_barcodes(self.input()[0].path, self.output().path)
 
 
 class Subdivide_Original_Clouds(luigi.Task):
@@ -90,16 +95,17 @@ class Subdivide_Original_Clouds(luigi.Task):
 
 class Single_Enhanced_Chunk(luigi.Task):
     chunk_num = luigi.IntParameter()
+    fragments = luigi.BoolParameter(parsing = luigi.BoolParameter.EXPLICIT_PARSING)
 
     def __init__(self, *args, **kwargs):
         super(Single_Enhanced_Chunk, self).__init__(*args, **kwargs)
-        self.chunk_file_name = '.'.join([gp.sort_prefix, str(self.chunk_num), 'csv'])
+        self.chunk_file_name = '.'.join(['bsort', str(self.chunk_num), 'csv'])
 
     def output(self):
         return luigi.LocalTarget(djoin(gp.enhd_cld_dir, 'R1', self.chunk_file_name)), luigi.LocalTarget(djoin(gp.enhd_cld_dir, 'R2', self.chunk_file_name))
 
     def run(self):
-        concat_annotations(djoin(gp.orig_map_dir, self.chunk_file_name), gp.enhd_cld_dir, True)
+        concat_annotations(djoin(gp.orig_map_dir, self.chunk_file_name), gp.enhd_cld_dir, self.fragments)
 
 
 class Generate_Enhanced_Chunks(luigi.Task):
@@ -109,7 +115,7 @@ class Generate_Enhanced_Chunks(luigi.Task):
         return Subdivide_Original_Clouds()
 
     def output(self):
-        return [luigi.LocalTarget(djoin(gp.enhd_cld_dir, '.'.join([gp.sort_prefix, 'R1', 'csv']))), luigi.LocalTarget(djoin(gp.enhd_cld_dir, '.'.join([gp.sort_prefix, 'R2', 'csv'])))]
+        return [luigi.LocalTarget(djoin(gp.enhd_cld_dir, 'bsort.R1.csv'), luigi.LocalTarget(djoin(gp.enhd_cld_dir, 'bsort.R2.csv')))]
 
     def run(self):
         for i in range(gp.num_chunks):
@@ -126,26 +132,25 @@ class Single_Enhanced_FastQ(luigi.Task):
     enh_csv = luigi.Parameter()
     direction = luigi.Parameter()
 
-    def output(self):
-        return luigi.LocalTarget(djoin(gp.read_dir, '.'.join([gp.final_prefix, self.direction, 'fastq'])))
-
-    def run(self): 
-        fastq_enhance(djoin(gp.read_dir, '.'.join([gp.base_prefix + '_' + gp.sort_prefix, self.direction, 'fastq'])), self.enh_csv, gp.enhd_cld_dir, gp.final_prefix) 
-        barcode_sorter(djoin(gp.enhd_cld_dir, '.'.join([gp.base_prefix + '_bwt', self.direction, 'fastq'])), gp.read_dir, False)
-
-
-class Enhance_Original_FastQs(luigi.Task):
-    """Create read files with enhanced read clouds."""
-
     def requires(self):
         return Generate_Enhanced_Chunks()
 
     def output(self):
-        return [luigi.LocalTarget(djoin(gp.read_dir, gp.final_prefix + '.R1.fastq')), luigi.LocalTarget(djoin(gp.read_dir, gp.final_prefix + '.R2.fastq'))]
+        return luigi.LocalTarget(djoin(gp.enhd_cld_dir, '.'.join([gp.edit_prefix, self.direction, 'fastq'])))
 
     def run(self): 
-        for i, j in enumerate(['R1','R2']):
-            yield Single_Enhanced_FastQ(enh_csv = self.input()[i].path, direction = j)
+        fastq_enhance(djoin(gp.read_dir, '.'.join([gp.base_prefix + '_bsort', self.direction, 'fastq'])), self.enh_csv, gp.enhd_cld_dir, gp.edit_prefix) 
+
+
+class Enhance_Original_FastQs(luigi.WrapperTask):
+    """Create read files with enhanced read clouds."""
+
+    def requires(self):
+        for i in ['R1','R2']:
+            Single_Sort_FastQ(in_dir = gp.enhd_cld_dir, prefix = gp.edit_prefix, direction = i, enhance_mode = True)
+
+    def output(self):
+        return [luigi.LocalTarget(djoin(gp.read_dir, gp.final_prefix + '.R1.fastq')), luigi.LocalTarget(djoin(gp.read_dir, gp.final_prefix + '.R2.fastq'))]
 
 
 class cloudSPAdes(luigi.Task):
@@ -171,7 +176,7 @@ class Single_FastQ_to_Table(luigi.Task):
         return luigi.LocalTarget(djoin(gp.analyses_dir, '.'.join(['bwt', self.direction, 'csv'])))
 
     def run(self): 
-        fastq_to_table(self.sorted_fastq, djoin(gp.enhd_cld_dir, '.'.join([gp.sort_prefix, self.direction, 'csv'])), gp.analyses_dir)
+        fastq_to_table(self.sorted_fastq, djoin(gp.enhd_cld_dir, '.'.join(['bsort', self.direction, 'csv'])), gp.analyses_dir)
 
 
 class Summarize_FastQ_Statistics(luigi.Task):
@@ -198,11 +203,12 @@ class bwt_de_Novo_Assembly(luigi.WrapperTask):
     read_dir = luigi.Parameter()
     prefix = luigi.Parameter()
     master_dir = luigi.Parameter()
+    fragments = luigi.BoolParameter(parsing = luigi.BoolParameter.EXPLICIT_PARSING)
     num_threads = luigi.Parameter()
     num_chunks = luigi.IntParameter()
 
     def requires(self):
-        gp.set_params(self.read_dir, self.prefix, self.master_dir, self.num_threads, self.num_chunks)
+        gp.set_params(self.read_dir, self.prefix, self.master_dir, self.fragments, self.num_threads, self.num_chunks)
         yield cloudSPAdes()
         yield Summarize_FastQ_Statistics()
 
@@ -214,7 +220,7 @@ class Global_Parameters:
         self.read_dir = None
         self.work_dir = None
         self.base_prefix = None
-        self.sort_prefix = 'bsort'
+        self.edit_prefix = None
         self.final_prefix = None
         self.num_threads = None
         self.orig_map_dir = None
@@ -223,11 +229,12 @@ class Global_Parameters:
         self.analyses_dir = None
         self.num_chunks = None
 
-    def set_params(self, read_dir, prefix, master_dir, num_threads, num_chunks):
+    def set_params(self, read_dir, prefix, master_dir, fragments, num_threads, num_chunks):
         self.read_dir = read_dir
-        self.work_dir = check_make(master_dir, prefix + '_bwt')
         self.base_prefix = prefix
-        self.final_prefix = prefix + '_bwt_bsort'
+        self.edit_prefix = prefix + '_bwt' if fragments else prefix + '_scf'
+        self.work_dir = check_make(master_dir, self.edit_prefix)
+        self.final_prefix = self.edit_prefix + '_bsort'
         self.num_threads = num_threads
         self.orig_map_dir = check_make(self.work_dir, 'original_mapping')
         self.enhd_cld_dir = check_make(self.work_dir, 'enhanced_clouds')

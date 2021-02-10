@@ -148,12 +148,13 @@ def decimalToBinary(n):
 def bam_to_annotate(bam, id_csv, outdir, est_fragments):
     """Generates read cloud enhancement information from BAM files. Output is [read, direction, reference name, (insert start position), (barcode)]."""
     inbam = pysam.AlignmentFile(bam, 'rb')
-    id2seq = {}
-    id2seq['None'] = 'None'
-    with open(id_csv, 'r') as ic:
-        for line in ic:
-            info = line.strip().split(',')
-            id2seq[info[0]] = info[1]
+    if id_csv: 
+        id2seq = {}
+        id2seq['None'] = 'None'
+        with open(id_csv, 'r') as ic:
+            for line in ic:
+                info = line.strip().split(',')
+                id2seq[info[0]] = info[1]
 
     # Ingest BAM file and extract mapped-to references and read-directions in pairs. 
     read_info_tbl = []
@@ -161,16 +162,16 @@ def bam_to_annotate(bam, id_csv, outdir, est_fragments):
     for read in inbam.fetch(until_eof=True):
         read_info = [read.query_name]
         read_info.append(1 - int((decimalToBinary(read.flag))[-7])) # Direction: 0 = forward, 1 = reverse
-        if read.reference_name and est_fragments:
+        if read.reference_name:
             # Find the left-most coordinate, and round down to the nearest multiple of 100,000, the estimated largest fragment size. 
             # start_pos = '-' + str(100000 * floor(min(read.reference_start, read.next_reference_start)) / 100000)  
-            read_info += [id2seq[read.reference_name], min(read.reference_start, read.next_reference_start)] # Mapped-to reference
-        elif read.reference_name: 
-            read_info += [id2seq[read.reference_name]]
-        elif est_fragments:
-            read_info += ['None', '-1']
+            read_info += [id2seq[read.reference_name] if id_csv else read.reference_name]
+            if est_fragments: 
+                read_info += [min(read.reference_start, read.next_reference_start)] # Mapped-to reference
         else:
             read_info += ['None']
+            if est_fragments:
+                read_info += ['-1']
         # if read.has_tag('BX'): # TODO correct this for EMA
         #     read_barcode = read.get_tag('BX')[2:-2]
         #     read_info_tbl.append([read_name, read_barcode, direction, read_aln_info])
