@@ -19,7 +19,7 @@ from evaluate_support import (
     generate_summaries
 )
 
-# PYTHONPATH='.' luigi --module bwt_pipeline bwt_de_Novo_Assembly --local-scheduler
+# PYTHONPATH='.' luigi --module X_pipeline de_Novo_Assembly --local-scheduler
 
 
 def check_make(curr_dir, sub):
@@ -76,7 +76,7 @@ class Map_Original_Clouds(luigi.Task):
         srt_step = subprocess.run(['samtools', 'sort', raw_bam, '-o', srt_bam])
         idx_step = subprocess.run(['samtools', 'index', srt_bam])
         bam_to_annotate(srt_bam, self.ids_to_names, gp.work_dir, self.fragments)
-        add_barcodes(self.input()[0].path, self.output().path)
+        add_barcodes(self.input()[0].path, 'bsort.csv', gp.work_dir)
 
 
 class Subdivide_Original_Clouds(luigi.Task):
@@ -142,12 +142,12 @@ class Single_Enhanced_FastQ(luigi.Task):
         fastq_enhance(djoin(gp.read_dir, '.'.join([gp.base_prefix + '_bsort', self.direction, 'fastq'])), self.enh_csv, gp.enhd_cld_dir, gp.edit_prefix) 
 
 
-class Enhance_Original_FastQs(luigi.WrapperTask):
+class Enhance_Original_FastQs(luigi.Task):
     """Create read files with enhanced read clouds."""
 
     def requires(self):
         for i in ['R1','R2']:
-            Single_Sort_FastQ(in_dir = gp.enhd_cld_dir, prefix = gp.edit_prefix, direction = i, enhance_mode = True)
+            yield Single_Sort_FastQ(in_dir = gp.enhd_cld_dir, prefix = gp.edit_prefix, direction = i, enhance_mode = True)
 
     def output(self):
         return [luigi.LocalTarget(djoin(gp.read_dir, gp.final_prefix + '.R1.fastq')), luigi.LocalTarget(djoin(gp.read_dir, gp.final_prefix + '.R2.fastq'))]
@@ -161,44 +161,44 @@ class cloudSPAdes(luigi.Task):
         return Enhance_Original_FastQs()
 
     def output(self):
-        return luigi.LocalTarget(djoin(gp.analyses_dir, 'bwt.scaffolds.fasta'))
+        return luigi.LocalTarget(djoin(gp.analyses_dir, gp.deconv_type + '.scaffolds.fasta'))
 
     def run(self):
         subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--meta', '--only-assembler', '--gemcode1-1', self.input()[0].path, '--gemcode1-2', self.input()[1].path, '--search-distance', '0', '--size-cutoff', '6', '-t', gp.num_threads, '-m', self.memory, '-o', gp.cldspades_dir])
         shutil.copy(djoin(gp.cldspades_dir, 'scaffolds.fasta'), self.output().path)
 
 
-class Single_FastQ_to_Table(luigi.Task):
-    sorted_fastq = luigi.Parameter()
-    direction = luigi.Parameter()
+# class Single_FastQ_to_Table(luigi.Task):
+#     sorted_fastq = luigi.Parameter()
+#     direction = luigi.Parameter()
 
-    def output(self):
-        return luigi.LocalTarget(djoin(gp.analyses_dir, '.'.join(['bwt', self.direction, 'csv'])))
+#     def output(self):
+#         return luigi.LocalTarget(djoin(gp.analyses_dir, '.'.join([gp.deconv_type, self.direction, 'csv'])))
 
-    def run(self): 
-        fastq_to_table(self.sorted_fastq, djoin(gp.enhd_cld_dir, '.'.join(['bsort', self.direction, 'csv'])), gp.analyses_dir)
-
-
-class Summarize_FastQ_Statistics(luigi.Task):
-    """Generate size, purity, and entropy summary statistics from enhanced reads."""
-
-    def requires(self):
-        return Enhance_Original_FastQs()
-
-    def output(self):
-        return luigi.LocalTarget(djoin(gp.analyses_dir, 'bwt.statistics.csv'))
-
-    def run(self):
-        # Match predicted read clouds to actual (reference sequence) read clouds
-        fastq_tbls = []
-        for i, j in enumerate(['R1','R2']):
-            yield Single_FastQ_to_Table(sorted_fastq = self.input()[i].path, direction = j)
-            fastq_tbls.append(djoin(gp.analyses_dir, '.'.join(['bwt', j, 'csv'])))
-        # Generate read cloud quality statistics tables 
-        generate_summaries(fastq_tbls[0], fastq_tbls[1], None, gp.analyses_dir)
+#     def run(self): 
+#         fastq_to_table(self.sorted_fastq, djoin(gp.enhd_cld_dir, '.'.join(['bsort', self.direction, 'csv'])), gp.analyses_dir)
 
 
-class bwt_de_Novo_Assembly(luigi.WrapperTask):
+# class Summarize_FastQ_Statistics(luigi.Task):
+#     """Generate size, purity, and entropy summary statistics from enhanced reads."""
+
+#     def requires(self):
+#         return Enhance_Original_FastQs()
+
+#     def output(self):
+#         return luigi.LocalTarget(djoin(gp.analyses_dir, gp.deconv_type + '.statistics.csv'))
+
+#     def run(self):
+#         # Match predicted read clouds to actual (reference sequence) read clouds
+#         fastq_tbls = []
+#         for i, j in enumerate(['R1','R2']):
+#             yield Single_FastQ_to_Table(sorted_fastq = self.input()[i].path, direction = j)
+#             fastq_tbls.append(djoin(gp.analyses_dir, '.'.join([gp.deconv_type, j, 'csv'])))
+#         # Generate read cloud quality statistics tables 
+#         generate_summaries(fastq_tbls[0], fastq_tbls[1], None, gp.analyses_dir)
+
+
+class de_Novo_Assembly(luigi.WrapperTask):
     """Top-level function calling cloudSPAdes and enhancement summaries."""
     read_dir = luigi.Parameter()
     prefix = luigi.Parameter()
@@ -210,7 +210,7 @@ class bwt_de_Novo_Assembly(luigi.WrapperTask):
     def requires(self):
         gp.set_params(self.read_dir, self.prefix, self.master_dir, self.fragments, self.num_threads, self.num_chunks)
         yield cloudSPAdes()
-        yield Summarize_FastQ_Statistics()
+        # yield Summarize_FastQ_Statistics()
 
 
 class Global_Parameters:
@@ -220,6 +220,7 @@ class Global_Parameters:
         self.read_dir = None
         self.work_dir = None
         self.base_prefix = None
+        self.deconv_type = None
         self.edit_prefix = None
         self.final_prefix = None
         self.num_threads = None
@@ -232,7 +233,8 @@ class Global_Parameters:
     def set_params(self, read_dir, prefix, master_dir, fragments, num_threads, num_chunks):
         self.read_dir = read_dir
         self.base_prefix = prefix
-        self.edit_prefix = prefix + '_bwt' if fragments else prefix + '_scf'
+        self.deconv_type = 'scf' if fragments else 'bwt'
+        self.edit_prefix = prefix + '_' + self.deconv_type
         self.work_dir = check_make(master_dir, self.edit_prefix)
         self.final_prefix = self.edit_prefix + '_bsort'
         self.num_threads = num_threads
@@ -248,4 +250,4 @@ class Global_Parameters:
 gp = Global_Parameters()
 
 if __name__ == '__main__':
-    luigi.run(main_cls_task = bwt_de_Novo_Assembly)
+    luigi.run(main_cls_task = de_Novo_Assembly)

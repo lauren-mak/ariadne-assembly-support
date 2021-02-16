@@ -62,10 +62,11 @@ def add_barcodes(fastq, annot_csv, outdir):
 
 @main.command('subdiv_annotations')
 @click.argument('infile') # Aggregated read information 
+@click.argument('num_chunks')
 @click.argument('outdir') 
-def subdiv_annotations(infile, outdir):
+def subdiv_annotations(infile, num_chunks, outdir):
     """Subsets total set of read clouds into smaller sets of read clouds so that the next step (concat_annotations) doesn't take forever. bwa-specific."""
-    assembly_support.subdiv_annotations(infile, outdir)
+    assembly_support.subdiv_annotations(infile, num_chunks, outdir)
 
 
 @main.command('concat_annotations')

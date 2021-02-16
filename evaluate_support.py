@@ -37,11 +37,11 @@ def fastq_to_table(fastq, mapping_tbl, outdir):
     with open(mapping_tbl, 'r') as mf:
         for line in mf:
             read_to_seq = line.strip().split(',')
-            read_seq_map[read_to_seq[0]] = read_to_seq[2]
+            read_seq_map[read_to_seq[0]] = read_to_seq[1]
 
     logger(f'Adding reference sequence information to reads')
     for i, read_name in enumerate(full_name_list):
-        read_name.append(read_seq_map[read_name[0]])
+        read_name.append(read_seq_map[read_name[0]] if read_name[0] in read_seq_map else -1)
         if (i % 1000000) == 0:
             logger(f'{i} reads have been processed')
     full_name_df = pd.DataFrame(full_name_list, columns = ['Read_Name', 'Barcode', 'Cloud_Num', 'Ref_Seq'])
@@ -425,7 +425,7 @@ def pairwise_graph_align(fastg, fasta_prefix, outdir, depth, fragment_mode, alig
     with open(fasta_prefix + '.R1.fasta', 'r') as f:
         for i, l in enumerate(f): 
             if (i % 2 == 0):  # >MN00867:6:000H2J7M3:1:22110:23088:18151 BX:Z:GGATTTATGTTTGAATGG-4
-                seq_to_cld_num[l.split()[0][1:]] = l.strip()[-1] # {seq:cld_num}
+                seq_to_cld_num[l.split()[0][1:]] = l.strip().split('-')[1] # {seq:cld_num}
     logger(f'Finished loading read cloud numbers from {fasta_prefix + ".R1.fasta"}')
 
     # Map all reads to assembly graph
