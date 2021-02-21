@@ -252,9 +252,9 @@ def make_main_graphs(all_df_list, distances, param_name, outdir):
         axs[x[i],y[i]].set_title(f'Search Distance = {distances[i]}')
     for ax in axs.flat:
         ax.set(xlabel='Purity', ylabel='Prop. Read Clouds')
-    # Hide x labels and tick labels for top plots and y ticks for right plots.
-    for ax in axs.flat:
-        ax.label_outer()
+    # Hide x labels and tick labels for everything but the left- and right-most plots. Removed because different axis scales.
+    # for ax in axs.flat:
+    #     ax.label_outer()
     fig.savefig('{}/{}_scaled.png'.format(outdir, param_name), format = 'png', dpi = 1200)
 
 
@@ -463,6 +463,7 @@ def pairwise_graph_align(fastg, fasta_prefix, outdir, depth, fragment_mode, alig
                     scaled_aln_dist.iloc[i,j] = aln_dist.iloc[i,j] / ( sum(aln_df.iloc[i,:]) + sum(aln_df.iloc[j,:]) )
                 # scaled_aln_dist.iloc[i,:] = aln_dist.iloc[i,:] / sum(aln_df.iloc[i,:])
             scaled_aln_dist.to_csv('.'.join([prefix, 'pairwise_aln', 'csv']))
+        aln_nodes = clean_df.Node.unique().tolist()
         ctg_df = pd.DataFrame.from_dict(ctg_dct, orient = 'index') 
         ctg_df.fillna(value = 0, inplace = True)
         ctg_nodes = ctg_df.columns.values.tolist()

@@ -101,6 +101,9 @@ class Single_Enhanced_Chunk(luigi.Task):
         super(Single_Enhanced_Chunk, self).__init__(*args, **kwargs)
         self.chunk_file_name = '.'.join(['bsort', str(self.chunk_num), 'csv'])
 
+    def requires(self):
+        return Subdivide_Original_Clouds()
+
     def output(self):
         return luigi.LocalTarget(djoin(gp.enhd_cld_dir, 'R1', self.chunk_file_name)), luigi.LocalTarget(djoin(gp.enhd_cld_dir, 'R2', self.chunk_file_name))
 
@@ -112,20 +115,21 @@ class Generate_Enhanced_Chunks(luigi.Task):
     """Convert reference sequence (and position) information to enhanced read clouds."""
 
     def requires(self):
-        return Subdivide_Original_Clouds()
+        for i in range(gp.num_chunks):
+            yield Single_Enhanced_Chunk(chunk_num = i)
 
     def output(self):
         return [luigi.LocalTarget(djoin(gp.enhd_cld_dir, 'bsort.R1.csv'), luigi.LocalTarget(djoin(gp.enhd_cld_dir, 'bsort.R2.csv')))]
 
     def run(self):
-        for i in range(gp.num_chunks):
-            yield Single_Enhanced_Chunk(chunk_num = i)
         for i, j in enumerate(['R1','R2']):
             with self.output()[i].open('w') as outf:
                 for chunk_file in listdir(djoin(gp.enhd_cld_dir, j)):
                     with open(djoin(gp.enhd_cld_dir, j, chunk_file)) as f: 
                         for l in f:
                             outf.write(l)
+            if gp.deconv_type is gp.gstd_prefix:
+                shutil.copy(self.output()[i].path, djoin(gp.analyses_dir, '.'.join([gp.gstd_prefix, j, 'csv'])))
 
 
 class Single_Enhanced_FastQ(luigi.Task):
@@ -161,41 +165,43 @@ class cloudSPAdes(luigi.Task):
         return Enhance_Original_FastQs()
 
     def output(self):
-        return luigi.LocalTarget(djoin(gp.analyses_dir, gp.deconv_type + '.scaffolds.fasta'))
+        return luigi.LocalTarget(djoin(gp.analyses_dir, gp.final_prefix + '.scaffolds.fasta'))
 
     def run(self):
         subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--meta', '--only-assembler', '--gemcode1-1', self.input()[0].path, '--gemcode1-2', self.input()[1].path, '--search-distance', '0', '--size-cutoff', '6', '-t', gp.num_threads, '-m', self.memory, '-o', gp.cldspades_dir])
         shutil.copy(djoin(gp.cldspades_dir, 'scaffolds.fasta'), self.output().path)
 
 
-# class Single_FastQ_to_Table(luigi.Task):
-#     sorted_fastq = luigi.Parameter()
-#     direction = luigi.Parameter()
+class Single_FastQ_to_Table(luigi.Task):
+    direction = luigi.Parameter()
 
-#     def output(self):
-#         return luigi.LocalTarget(djoin(gp.analyses_dir, '.'.join([gp.deconv_type, self.direction, 'csv'])))
+    def requires(self):
+        return Enhance_Original_FastQs()
 
-#     def run(self): 
-#         fastq_to_table(self.sorted_fastq, djoin(gp.enhd_cld_dir, '.'.join(['bsort', self.direction, 'csv'])), gp.analyses_dir)
+    def output(self):
+        return luigi.LocalTarget(djoin(gp.analyses_dir, '.'.join([gp.final_prefix, self.direction, 'csv'])))
+
+    def run(self): 
+        fastq_to_table(djoin(gp.read_dir, '.'.join([gp.final_prefix, self.direction, 'fastq'])), 
+                       djoin(gp.analyses_dir, '.'.join([gp.gstd_prefix, self.direction, 'csv'])), gp.analyses_dir)
 
 
-# class Summarize_FastQ_Statistics(luigi.Task):
-#     """Generate size, purity, and entropy summary statistics from enhanced reads."""
+class Summarize_FastQ_Statistics(luigi.Task):
+    """Generate size, purity, and entropy summary statistics from enhanced reads."""
 
-#     def requires(self):
-#         return Enhance_Original_FastQs()
+    def requires(self):
+        # Match predicted read clouds to actual (reference sequence) read clouds
+        fastq_tbls = []
+        for i in ['R1','R2']:
+            fastq_tbls.append(Single_FastQ_to_Table(direction = i))
+        return fastq_tbls
 
-#     def output(self):
-#         return luigi.LocalTarget(djoin(gp.analyses_dir, gp.deconv_type + '.statistics.csv'))
+    def output(self):
+        return luigi.LocalTarget(djoin(gp.analyses_dir, gp.final_prefix + '.statistics.csv'))
 
-#     def run(self):
-#         # Match predicted read clouds to actual (reference sequence) read clouds
-#         fastq_tbls = []
-#         for i, j in enumerate(['R1','R2']):
-#             yield Single_FastQ_to_Table(sorted_fastq = self.input()[i].path, direction = j)
-#             fastq_tbls.append(djoin(gp.analyses_dir, '.'.join([gp.deconv_type, j, 'csv'])))
-#         # Generate read cloud quality statistics tables 
-#         generate_summaries(fastq_tbls[0], fastq_tbls[1], None, gp.analyses_dir)
+    def run(self):
+        # Generate read cloud quality statistics tables 
+        generate_summaries(self.input()[0].path, self.input()[1].path, gp.analyses_dir, None)
 
 
 class de_Novo_Assembly(luigi.WrapperTask):
@@ -203,14 +209,15 @@ class de_Novo_Assembly(luigi.WrapperTask):
     read_dir = luigi.Parameter()
     prefix = luigi.Parameter()
     master_dir = luigi.Parameter()
-    fragments = luigi.BoolParameter(parsing = luigi.BoolParameter.EXPLICIT_PARSING)
+    deconv_type = luigi.Parameter()
+    gold_standard = luigi.Parameter()
     num_threads = luigi.Parameter()
     num_chunks = luigi.IntParameter()
 
     def requires(self):
-        gp.set_params(self.read_dir, self.prefix, self.master_dir, self.fragments, self.num_threads, self.num_chunks)
+        gp.set_params(self.read_dir, self.prefix, self.master_dir, self.deconv_type, self.gold_standard, self.num_threads, self.num_chunks)
         yield cloudSPAdes()
-        # yield Summarize_FastQ_Statistics()
+        yield Summarize_FastQ_Statistics()
 
 
 class Global_Parameters:
@@ -221,8 +228,10 @@ class Global_Parameters:
         self.work_dir = None
         self.base_prefix = None
         self.deconv_type = None
+        self.fragments = None
         self.edit_prefix = None
         self.final_prefix = None
+        self.gstd_prefix = None
         self.num_threads = None
         self.orig_map_dir = None
         self.enhd_cld_dir = None
@@ -230,13 +239,15 @@ class Global_Parameters:
         self.analyses_dir = None
         self.num_chunks = None
 
-    def set_params(self, read_dir, prefix, master_dir, fragments, num_threads, num_chunks):
+    def set_params(self, read_dir, prefix, master_dir, deconv_type, gold_standard, num_threads, num_chunks):
         self.read_dir = read_dir
         self.base_prefix = prefix
-        self.deconv_type = 'scf' if fragments else 'bwt'
-        self.edit_prefix = prefix + '_' + self.deconv_type
+        self.deconv_type = deconv_type
+        self.fragments = True if deconv_type is 'frg' else False
+        self.edit_prefix = prefix + '_' + deconv_type
         self.work_dir = check_make(master_dir, self.edit_prefix)
         self.final_prefix = self.edit_prefix + '_bsort'
+        self.gstd_prefix = gold_standard
         self.num_threads = num_threads
         self.orig_map_dir = check_make(self.work_dir, 'original_mapping')
         self.enhd_cld_dir = check_make(self.work_dir, 'enhanced_clouds')

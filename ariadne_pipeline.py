@@ -128,17 +128,17 @@ class cloudSPAdes_final(luigi.Task):
 
 
 class Single_FastQ_to_Table(luigi.Task):
-    sorted_fastq = luigi.Parameter()
     direction = luigi.Parameter()
 
     def requires(self):
-        return Complete_Ariadne_FastQs()
+        return cloudSPAdes_init()
 
     def output(self):
         return luigi.LocalTarget(djoin(gp.analyses_dir, '.'.join([gp.search_dist, self.direction, 'csv'])))
 
     def run(self): 
-        fastq_to_table(self.sorted_fastq, djoin(gp.enhd_cld_dir, '.'.join(['bsort', self.direction, 'csv'])), gp.analyses_dir)
+        fastq_to_table(djoin(gp.cs_init_dir, 'K55', '.'.join([gp.search_dist, self.direction, 'fastq'])), 
+                       djoin(gp.analyses_dir, '.'.join([gp.gstd_prefix, self.direction, 'csv'])), gp.analyses_dir)
 
 
 class Summarize_FastQ_Statistics(luigi.Task):
@@ -147,8 +147,8 @@ class Summarize_FastQ_Statistics(luigi.Task):
     def requires(self):
         # Match predicted read clouds to actual (reference sequence) read clouds
         fastq_tbls = []
-        for i, j in enumerate(['R1','R2']):
-            fastq_tbls.append(Single_FastQ_to_Table(sorted_fastq = self.input()[i].path, direction = j))
+        for i in ['R1','R2']:
+            fastq_tbls.append(Single_FastQ_to_Table(direction = i))
         return fastq_tbls
 
     def output(self):
@@ -156,7 +156,7 @@ class Summarize_FastQ_Statistics(luigi.Task):
 
     def run(self):
         # Generate read cloud quality statistics tables 
-        generate_summaries(self.input()[0].path, self.input()[1].path, None, gp.analyses_dir)
+        generate_summaries(self.input()[0].path, self.input()[1].path, gp.analyses_dir, None)
 
 
 class de_Novo_Assembly(luigi.WrapperTask):
@@ -164,14 +164,15 @@ class de_Novo_Assembly(luigi.WrapperTask):
     read_dir = luigi.Parameter()
     prefix = luigi.Parameter()
     search_dist = luigi.Parameter()
+    gold_standard = luigi.Parameter()
     master_dir = luigi.Parameter()
     num_threads = luigi.Parameter()
     memory = luigi.Parameter()
 
     def requires(self):
-        gp.set_params(self.read_dir, self.prefix, self.search_dist, self.master_dir, self.num_threads, self.memory)
+        gp.set_params(self.read_dir, self.prefix, self.search_dist, self.gold_standard, self.master_dir, self.num_threads, self.memory)
         yield cloudSPAdes_final()
-        # yield Summarize_FastQ_Statistics()
+        yield Summarize_FastQ_Statistics()
 
 
 class Global_Parameters:
@@ -182,6 +183,7 @@ class Global_Parameters:
         self.work_dir = None
         self.prefix = None
         self.search_dist = None
+        self.gstd_prefix = None
         self.num_threads = None
         self.memory = None
         self.cs_init_dir = None
@@ -189,18 +191,19 @@ class Global_Parameters:
         self.cs_final_dir = None
         self.analyses_dir = None
 
-    def set_params(self, read_dir, prefix, search_dist, master_dir, num_threads, memory):
+    def set_params(self, read_dir, prefix, search_dist, gold_standard, master_dir, num_threads, memory):
         self.read_dir = read_dir
         self.work_dir = check_make(master_dir, prefix + '_' + search_dist)
         self.prefix = prefix
         self.search_dist = search_dist
         self.ariadne_prefix =  search_dist + '_full_bsort'
+        self.gstd_prefix = gold_standard
         self.num_threads = num_threads
         self.memory = memory
         self.cs_init_dir = check_make(self.work_dir, 'cloudSPAdes_init')
         self.ariadne_dir = check_make(self.work_dir, 'ariadne_intermediate')
         self.cs_final_dir = check_make(self.work_dir, 'cloudSPAdes_final')
-        self.analyses_dir = check_make(self.work_dir, 'analyses')
+        self.analyses_dir = check_make(master_dir, prefix + '_' + 'analyses')
 
 
 gp = Global_Parameters()

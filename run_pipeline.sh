@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --partition=panda
 
-# $1 = assembly mode (ariadne, bowtie2/bwt, scaffolds/scf)
+# $1 = assembly mode (ariadne, bowtie)
 # $2 = Luigi config path
 # $3 = number of threads (only works on curie)
 
