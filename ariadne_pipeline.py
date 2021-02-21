@@ -58,13 +58,17 @@ class cloudSPAdes_init(luigi.Task):
         return Sort_FastQs_by_Barcode()
 
     def output(self):
-        return [luigi.LocalTarget(djoin(gp.cs_init_dir, 'K55', gp.search_dist + '.R1.fastq')),
-                luigi.LocalTarget(djoin(gp.cs_init_dir, 'K55', gp.search_dist + '.R2.fastq'))]
+        return luigi.LocalTarget(djoin(gp.cs_init_dir, 'scaffolds.fasta'))
+        #[luigi.LocalTarget(djoin(gp.cs_init_dir, 'K55', gp.search_dist + '.R1.fastq')), luigi.LocalTarget(djoin(gp.cs_init_dir, 'K55', gp.search_dist + '.R2.fastq'))]
 
     def run(self):
-        subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--meta', '--only-assembler', '--gemcode1-1',
+        retcode = subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--meta', '--only-assembler', '--gemcode1-1',
                         self.input()[0].path, '--gemcode1-2', self.input()[1].path, '--search-distance', gp.search_dist,
                         '--size-cutoff', '6', '-t', gp.num_threads, '-m', gp.memory, '-o', gp.cs_init_dir])
+        spades_mem = int(gp.memory) + 100
+        while retcode.returncode:
+            retcode = subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--restart-from', 'k55', '-m', str(spades_mem), '-o', gp.cs_init_dir])
+            spades_mem += 100
 
 
 class Single_Complete_FastQ(luigi.Task):
@@ -105,46 +109,54 @@ class cloudSPAdes_final(luigi.Task):
     """Run cloudSPAdes on the completed Ariadne-deconvolved read clouds."""
 
     def requires(self):
-        return Complete_Ariadne_FastQs()
+        return cloudSPAdes_init()
 
     def output(self):
         return luigi.LocalTarget(djoin(gp.analyses_dir, gp.search_dist + '.scaffolds.fasta'))
 
     def run(self):
-        subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--meta', '--only-assembler', '--gemcode1-1',
-                        self.input()[0].path, '--gemcode1-2', self.input()[1].path, '--search-distance', '0',
+        fastq_prefix = djoin(gp.cs_init_dir, 'K55', gp.search_dist)
+        retcode = subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--meta', '--only-assembler', '--gemcode1-1',
+                        fastq_prefix + '.R1.fastq', '--gemcode1-2', fastq_prefix + '.R2.fastq', '--search-distance', '0',
                         '--size-cutoff', '6', '-t', gp.num_threads, '-m', gp.memory, '-o', gp.cs_final_dir])
+                        # '-k', '55', '--assembly-graph', djoin(gp.cs_init_dir, 'assembly_graph.fastg')])
+        spades_mem = int(gp.memory) + 100
+        while retcode.returncode:
+            retcode = subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--restart-from', 'k55', '-m', str(spades_mem), '-o', gp.cs_final_dir])
+            spades_mem += 100
         shutil.copy(djoin(gp.cs_final_dir, 'scaffolds.fasta'), self.output().path)
 
 
-# class Single_FastQ_to_Table(luigi.Task):
-#     sorted_fastq = luigi.Parameter()
-#     direction = luigi.Parameter()
+class Single_FastQ_to_Table(luigi.Task):
+    sorted_fastq = luigi.Parameter()
+    direction = luigi.Parameter()
 
-#     def output(self):
-#         return luigi.LocalTarget(djoin(gp.analyses_dir, '.'.join([gp.search_dist, self.direction, 'csv'])))
+    def requires(self):
+        return Complete_Ariadne_FastQs()
 
-#     def run(self): 
-#         fastq_to_table(self.sorted_fastq, djoin(gp.enhd_cld_dir, '.'.join(['bsort', self.direction, 'csv'])), gp.analyses_dir)
+    def output(self):
+        return luigi.LocalTarget(djoin(gp.analyses_dir, '.'.join([gp.search_dist, self.direction, 'csv'])))
+
+    def run(self): 
+        fastq_to_table(self.sorted_fastq, djoin(gp.enhd_cld_dir, '.'.join(['bsort', self.direction, 'csv'])), gp.analyses_dir)
 
 
-# class Summarize_FastQ_Statistics(luigi.Task):
-#     """Generate size, purity, and entropy summary statistics from enhanced reads."""
+class Summarize_FastQ_Statistics(luigi.Task):
+    """Generate size, purity, and entropy summary statistics from enhanced reads."""
 
-#     def requires(self):
-#         return Complete_Ariadne_FastQs()
+    def requires(self):
+        # Match predicted read clouds to actual (reference sequence) read clouds
+        fastq_tbls = []
+        for i, j in enumerate(['R1','R2']):
+            fastq_tbls.append(Single_FastQ_to_Table(sorted_fastq = self.input()[i].path, direction = j))
+        return fastq_tbls
 
-#     def output(self):
-#         return luigi.LocalTarget(djoin(gp.analyses_dir, gp.search_dist + '.statistics.csv'))
+    def output(self):
+        return luigi.LocalTarget(djoin(gp.analyses_dir, gp.search_dist + '.statistics.csv'))
 
-#     def run(self):
-#         # Match predicted read clouds to actual (reference sequence) read clouds
-#         fastq_tbls = []
-#         for i, j in enumerate(['R1','R2']):
-#             yield Single_FastQ_to_Table(sorted_fastq = self.input()[i].path, direction = j)
-#             fastq_tbls.append(djoin(gp.analyses_dir, '.'.join([gp.search_dist, j, 'csv'])))
-#         # Generate read cloud quality statistics tables 
-#         generate_summaries(fastq_tbls[0], fastq_tbls[1], None, gp.analyses_dir)
+    def run(self):
+        # Generate read cloud quality statistics tables 
+        generate_summaries(self.input()[0].path, self.input()[1].path, None, gp.analyses_dir)
 
 
 class de_Novo_Assembly(luigi.WrapperTask):

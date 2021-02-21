@@ -30,10 +30,9 @@ Support Functions for Ariadne
 @click.argument('original_fq') # FastQ file with original read clouds
 @click.argument('enhanced_fq') # FastQ file with enhanced read clouds
 @click.argument('full_fq') # Output FastQ file with missing unbarcoded reads
-@click.argument('depth') # Number of edges to search
-def complete_reads(original_fq, enhanced_fq, full_fq, depth):
+def complete_reads(original_fq, enhanced_fq, full_fq):
     """Adds reads missing from the enhanced FastQs based on the total set of reads in the original FastQs."""
-    assembly_support.complete_reads(original_fq, enhanced_fq, full_fq, depth)
+    assembly_support.complete_reads(original_fq, enhanced_fq, full_fq)
 
 
 """

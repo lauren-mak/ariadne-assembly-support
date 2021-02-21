@@ -119,21 +119,13 @@ def complete_reads(original_fq, enhanced_fq, full_fq):
     """Adds reads missing from the enhanced FastQs based on the total set of reads in the original FastQs."""
     enh_names = get_read_names(enhanced_fq)
     all_reads = get_read_full(original_fq)
-    num_processed = 0
-    num_missing = 0
     with open(full_fq, 'w') as ff:
-        for r in all_reads:
-            r_info = all_reads[r]
-            if r in enh_names:
-                r_name = enh_names[r]
-            else:
-                r_name = r_info[0].replace('-1', '-0') # Indicates that the read was not deconvolved. 
-                num_missing += 1
-            ff.write(r_name + '\n' + r_info[1] + '\n' + r_info[2] + '\n' + r_info[3] + '\n')
-            num_processed += 1
-            if (num_processed % 1000000) == 0:
-                logger('Processed ' + str(num_processed) + ' reads')
-    logger('There are ' + str(num_missing) + ' reads from ' + original_fq + ' that were not included')
+        for i, r in enumerate(enh_names):
+            r_info = all_reads.pop(r)
+            ff.write(enh_names[r] + '\n' + r_info[1] + '\n' + r_info[2] + '\n' + r_info[3] + '\n')
+        logger(f'There are {len(all_reads)} reads from {original_fq} that were not included')
+        for r, r_info in all_reads.items():
+            ff.write(r_info[0] + '\n' + r_info[1] + '\n' + r_info[2] + '\n' + r_info[3] + '\n')    
 
 
 """
