@@ -62,13 +62,20 @@ class cloudSPAdes_init(luigi.Task):
         #[luigi.LocalTarget(djoin(gp.cs_init_dir, 'K55', gp.search_dist + '.R1.fastq')), luigi.LocalTarget(djoin(gp.cs_init_dir, 'K55', gp.search_dist + '.R2.fastq'))]
 
     def run(self):
-        retcode = subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--meta', '--only-assembler', '--gemcode1-1',
-                        self.input()[0].path, '--gemcode1-2', self.input()[1].path, '--search-distance', gp.search_dist,
-                        '--size-cutoff', '6', '-t', gp.num_threads, '-m', gp.memory, '-o', gp.cs_init_dir])
+        if exists(djoin(gp.cs_init_dir, 'K33', 'assembly_graph.fastg')): # The previous iteration exists, run from the last one.
+            retcode = subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--restart-from', 'k55', '-o', gp.cs_init_dir])
+        else: # The initial cloudSPAdes iterations do not exist.
+            retcode = subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--meta', '--only-assembler', '--gemcode1-1',
+                            self.input()[0].path, '--gemcode1-2', self.input()[1].path, '--search-distance', gp.search_dist,
+                            '--size-cutoff', '6', '-t', gp.num_threads, '-m', gp.memory, '-o', gp.cs_init_dir])
         spades_mem = int(gp.memory) + 100
         while retcode.returncode:
             retcode = subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--restart-from', 'k55', '-m', str(spades_mem), '-o', gp.cs_init_dir])
             spades_mem += 100
+
+
+class Make_Unbarcoded_FastQs(luigi.Task):
+    pass
 
 
 class Single_Complete_FastQ(luigi.Task):
@@ -76,18 +83,23 @@ class Single_Complete_FastQ(luigi.Task):
     direction = luigi.Parameter()
 
     def requires(self):
-        return cloudSPAdes_init()
+        return cloudSPAdes_init() #, Make_Unbarcoded_FastQs()]
 
     def output(self):
         return luigi.LocalTarget(
             djoin(gp.ariadne_dir, '.'.join([gp.ariadne_prefix, self.direction, 'fastq'])))
 
     def run(self):
-        complete_reads(djoin(gp.read_dir, '.'.join([gp.prefix + '_bsort', self.direction, 'fastq'])),
-                       djoin(gp.cs_init_dir, 'K55', '.'.join([gp.search_dist, self.direction, 'fastq'])),
-                       djoin(gp.ariadne_dir, '.'.join([gp.search_dist + '_full', self.direction, 'fastq'])))
-        yield Single_Sort_FastQ(in_dir = gp.ariadne_dir, prefix = gp.search_dist + '_full', direction = self.direction,
-                          out_dir = gp.ariadne_dir)
+        # complete_reads(djoin(gp.read_dir, '.'.join([gp.prefix + '_bsort', self.direction, 'fastq'])),
+        #                djoin(gp.cs_init_dir, 'K55', '.'.join([gp.search_dist, self.direction, 'fastq'])),
+        #                djoin(gp.ariadne_dir, '.'.join([gp.search_dist + '_full', self.direction, 'fastq'])))
+        # yield Single_Sort_FastQ(in_dir = gp.ariadne_dir, prefix = gp.search_dist + '_full', direction = self.direction,
+        #                   out_dir = gp.ariadne_dir)
+        with self.output().open('w') as out_fq:
+            with open(djoin(gp.cs_init_dir, 'K55', '.'.join([gp.search_dist, self.direction, 'fastq']))) as ari_fq, \
+                 open(djoin(gp.read_dir, '.'.join([gp.prefix + '_nobc', self.direction, 'fastq']))) as nobc_fq:
+                out_fq.write(ari_fq.read())
+                out_fq.write(nobc_fq.read())
 
 
 class Complete_Ariadne_FastQs(luigi.Task):
@@ -109,16 +121,17 @@ class cloudSPAdes_final(luigi.Task):
     """Run cloudSPAdes on the completed Ariadne-deconvolved read clouds."""
 
     def requires(self):
-        return cloudSPAdes_init()
+        return Complete_Ariadne_FastQs()
 
     def output(self):
         return luigi.LocalTarget(djoin(gp.analyses_dir, gp.search_dist + '.scaffolds.fasta'))
 
     def run(self):
         fastq_prefix = djoin(gp.cs_init_dir, 'K55', gp.search_dist)
-        retcode = subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--meta', '--only-assembler', '--gemcode1-1',
-                        fastq_prefix + '.R1.fastq', '--gemcode1-2', fastq_prefix + '.R2.fastq', '--search-distance', '0',
-                        '--size-cutoff', '6', '-t', gp.num_threads, '-m', gp.memory, '-o', gp.cs_final_dir])
+        retcode = subprocess.run(['/home/lam4003/bin/spades/assembler/spades.py', '--meta', '--only-assembler', \
+                        '--gemcode1-1', djoin(gp.ariadne_dir, gp.ariadne_prefix + '.R1.fastq'), \
+                        '--gemcode1-2', djoin(gp.ariadne_dir, gp.ariadne_prefix + '.R2.fastq'), \
+                        '--search-distance', '0', '--size-cutoff', '6', '-t', gp.num_threads, '-m', gp.memory, '-o', gp.cs_final_dir])
                         # '-k', '55', '--assembly-graph', djoin(gp.cs_init_dir, 'assembly_graph.fastg')])
         spades_mem = int(gp.memory) + 100
         while retcode.returncode:

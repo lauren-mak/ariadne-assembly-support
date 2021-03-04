@@ -127,6 +127,14 @@ def pairwise_graph_align(fastg, fasta, outdir, depth, fragment_mode, aligned_onl
     evaluate_support.pairwise_graph_align(fastg, fasta, outdir, depth, fragment_mode, aligned_only)
 
 
+@main.command('make_barcode_whitelist')
+@click.argument('in_fq') # FastQ file with original read clouds
+@click.argument('outdir') 
+def make_barcode_whitelist(in_fq, outdir):
+    """Extract linked-read barcodes into a custom whitelist from FastQ. For the EMA tool."""
+    assembly_support.make_barcode_whitelist(in_fq, outdir)
+
+
 if __name__ == '__main__':
     main()
 

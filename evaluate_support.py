@@ -258,7 +258,7 @@ def make_main_graphs(all_df_list, distances, param_name, outdir):
     fig.savefig('{}/{}_scaled.png'.format(outdir, param_name), format = 'png', dpi = 1200)
 
 
-def make_secondary_graphs(param_list, distances, param_name, outdir): 
+def make_secondary_graphs(param_list, param_stdev, distances, param_name, outdir): 
     # Matplotlib settings needed to create complex bar plots
     mpl.rcParams['font.size'] = 6
     mpl.rcParams['figure.dpi'] = 250
@@ -270,16 +270,13 @@ def make_secondary_graphs(param_list, distances, param_name, outdir):
     # cmap = cm.RdPu_r(normed_distances, bytes=False) # Luminance increases monotonically
     cmap = cm.Set2(np.linspace(0, 1, len(param_list)))
 
-    param_std = list(map(lambda lst: np.std(lst), param_list))
-    # y_error = [np.subtract(param_list, param_std), np.add(param_list, param_std)]
+    # y_error = [np.subtract(param_list, param_stdev), np.add(param_list, param_stdev)]
     
     plt.bar(distances, param_list, color = cmap) # yerr = y_error, 
     plt.xlabel('Search Distance')
     plt.ylabel(param_name)
     param2strng = param_name.replace(' ', '_').replace('.', '')
     fig.savefig('{}/{}.png'.format(outdir, param2strng), format = 'png', dpi = 1200)
-    df = pd.DataFrame(list(zip(distances,param_list)), columns=['Search_Distances', param2strng])
-    df.to_csv('{}/{}.tbl'.format(outdir, param2strng))
 
 
 def evaluate_clouds(distances, prefixes, outdir):
@@ -298,22 +295,24 @@ def evaluate_clouds(distances, prefixes, outdir):
     make_main_graphs(all_df_list, search_distances, 'Entropy', outdir)
     logger('Finished the main purity and entropy comparison graphs')
 
-    # How many read clouds are there in total? 
-    # num_read_clouds = list(map(lambda df: len(df.index), all_df_list))
-    # make_secondary_graphs(num_read_clouds, search_distances, 'Num. Read Clouds', outdir)
     # What is the average size of a read-cloud?
     avg_cloud_size = list(map(lambda df: np.mean(df['Size']), all_df_list))
-    make_secondary_graphs(avg_cloud_size, search_distances, 'Avg. Cloud Size', outdir)
-    # # How many reads were deconvolved?
-    # num_reads_decon = list(map(lambda df: df['Size'].sum(), all_df_list[1:]))
-    # make_secondary_graphs(num_reads_decon, search_distances[1:], 'Num. Read Deconv.', outdir)
+    size_stdev = list(map(lambda df: np.std(df['Size']), all_df_list))
+    make_secondary_graphs(avg_cloud_size, size_stdev, search_distances, 'Avg. Cloud Size', outdir)
     # What is the average purity of the read clouds?
     avg_cloud_purity = list(map(lambda df: np.mean(df['Purity']), all_df_list))
-    make_secondary_graphs(avg_cloud_purity, search_distances, 'Avg. Cloud Purity.', outdir)
+    purity_stdev = list(map(lambda df: np.std(df['Purity']), all_df_list))
+    make_secondary_graphs(avg_cloud_purity, purity_stdev, search_distances, 'Avg. Cloud Purity.', outdir)
     # What is the average purity of the read clouds?
     avg_cloud_entropy = list(map(lambda df: np.mean(df['Entropy']), all_df_list))
-    make_secondary_graphs(avg_cloud_entropy, search_distances, 'Avg. Cloud Entropy.', outdir)
+    entropy_stdev = list(map(lambda df: np.std(df['Entropy']), all_df_list))
+    make_secondary_graphs(avg_cloud_entropy, entropy_stdev, search_distances, 'Avg. Cloud Entropy.', outdir)
     logger('Finished the accessory graphs')
+    # TODO How many reads were deconvolved?
+
+    df = pd.DataFrame(list(zip(search_distances, avg_cloud_size, size_stdev, avg_cloud_purity, purity_stdev, avg_cloud_entropy, entropy_stdev)), 
+        columns = ['Search_Distances', 'Avg. Cloud Size', 'Std. Dev.', 'Avg. Cloud Purity', 'Std. Dev.', 'Avg. Cloud Entropy', 'Std. Dev.'])
+    df.round(decimals = 2).to_csv('{}/{}.tbl'.format(outdir, 'Avg_Summary_Stats'))
 
 
 def map_read_clouds(fg, prefix, fa, seq_to_cld_num):
