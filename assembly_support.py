@@ -168,6 +168,7 @@ def bam_to_annotate(bam, id_csv, outdir, est_fragments):
             read_info += [read.get_tag('BX')[2:-2]]
         read_info_tbl.append(read_info)
     col_names = ['Name', 'Direction', 'Reference']
+    col_names.append('Barcode') if len(read_info_tbl[0]) == 4 else None
     col_names.append('Start') if est_fragments else None
     pd.DataFrame(read_info_tbl).to_csv(join(outdir, prefix(bam) + '.csv'), index = False, header = col_names)    
 
@@ -324,3 +325,23 @@ def make_barcode_whitelist(in_fq, outdir):
                     curr_bc = bc
                 if (i % 1000000) == 0:
                     logger('Processed ' + str(i) + ' lines')
+
+
+def interleave_fastqs(in_fq_prefix, outdir, ema):
+    with open(in_fq_prefix + '.R1.fastq') as fw_fq, \
+         open(in_fq_prefix + '.R2.fastq') as rv_fq, \
+         open(join(outdir, prefix(in_fq_prefix) + '.fastq'), 'w') as out_fq: 
+        while True:
+            line = fw_fq.readline()
+            if line.strip() == "":
+                break
+            read_name = line.replace('BX:Z', '1:N:0').replace('-1','') if ema else line
+            out_fq.write(read_name)
+            for i in range(3):
+                out_fq.write(fw_fq.readline())
+            line = rv_fq.readline()
+            read_name = line.replace('BX:Z', '2:N:0').replace('-1','') if ema else line
+            out_fq.write(read_name)
+            for i in range(3):
+                out_fq.write(rv_fq.readline())
+

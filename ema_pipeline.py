@@ -21,7 +21,7 @@ from evaluate_support import (
 
 # spack load gcc@6.3.0
 # PYTHONPATH='.' luigi --module ariadne_pipeline de_Novo_Assembly --local-scheduler
-
+# ./run_ema_pipeline.sh ema ema.cfg 10 ../unicellular_reads/test_reads/ ecoli_10x ecoli_10x_bsort.whitelist.txt 10
 
 def check_make(curr_dir, sub):
     outdir = djoin(curr_dir, sub)
@@ -37,68 +37,12 @@ class Single_Sort_FastQ(luigi.Task):
     enhance_mode = luigi.BoolParameter(parsing = luigi.BoolParameter.EXPLICIT_PARSING)
 
     def output(self):
-        return luigi.LocalTarget(djoin(gp.read_dir, '.'.join([self.prefix + '_bsort', self.direction, 'fastq'])))
+        return luigi.LocalTarget(djoin(gp.work_dir, '.'.join([self.prefix + '_bsort', self.direction, 'fastq'])))
 
     def run(self):
         if self.enhance_mode:
             yield Single_Enhanced_FastQ(enh_csv = djoin(gp.enhd_cld_dir, '.'.join(['bsort', self.direction, 'csv'])), direction = self.direction)
-        barcode_sorter(djoin(self.in_dir, '.'.join([self.prefix, self.direction, 'fastq'])), gp.read_dir, False) 
-
-
-class Interleave_FastQs(luigi.Task):
-    """Interleave paired-end FastQ files."""
-    # Function based on https://github.com/ekg/interleave-fastq/blob/62e09673b18b0d5b0204b5342046be6131937d60/interleave-fastq
-
-    def output(self):
-        return luigi.LocalTarget(djoin(gp.work_dir, '.'.join([gp.sort_prefix, 'fastq'])))
-
-    def run(self):
-        read_prefix = djoin(gp.read_dir, gp.sort_prefix)
-        with open(djoin(gp.read_dir, gp.sort_prefix) + '.R1.fastq') as fw_fq, \
-             open(djoin(gp.read_dir, gp.sort_prefix) + '.R2.fastq') as rv_fq, \
-             self.output().open('w') as out_fq: 
-            while True:
-                line = fw_fq.readline()
-                if line.strip() == "":
-                    break
-                out_fq.write(line)
-                for i in range(3):
-                    out_fq.write(fw_fq.readline())
-                for i in range(4):
-                    out_fq.write(rv_fq.readline())
-
-
-class Make_EMA_Counts(luigi.Task):
-    """Generate preliminary barcode counts to bin reads."""
-
-    def __init__(self, *args, **kwargs):
-        super(Make_EMA_Counts, self).__init__(*args, **kwargs)
-        self.out_prefix = djoin(gp.work_dir, gp.sort_prefix)
-
-    def requires(self):
-        return Interleave_FastQs()
-
-    def output(self):
-        return luigi.LocalTarget(self.out_prefix + '.ema-ncnt')
-
-    def run(self):
-        subprocess.run(['/home/lam4003/bin/ema/ema', 'count', '-w', gp.whitelist, '-o', self.out_prefix], \
-            input = djoin(gp.work_dir, '.'.join([gp.sort_prefix, 'fastq'])).encode('utf-8'))
-
-
-class Generate_EMA_Bins(luigi.Task):
-    """Generate bins of reads for EMA-based alignment."""
-
-    def requires(self):
-        return Make_EMA_Counts()
-
-    def output(self):
-        return luigi.LocalTarget(djoin(gp.bin_dir, 'ema-bin-499'))
-
-    def run(self):
-        subprocess.run(['/home/lam4003/bin/ema/ema', 'preproc', '-w', gp.whitelist, '-n', gp.num_chunks, '-o', gp.bin_dir, \
-            djoin(gp.work_dir, gp.sort_prefix + '.ema-ncnt')], \
-            input = djoin(gp.work_dir, '.'.join([gp.sort_prefix, 'fastq'])).encode('utf-8'))
+        barcode_sorter(djoin(self.in_dir, '.'.join([self.prefix, self.direction, 'fastq'])), gp.work_dir, False) 
 
 
 class Single_Bin_BAM(luigi.Task):
@@ -108,18 +52,18 @@ class Single_Bin_BAM(luigi.Task):
 
     def __init__(self, *args, **kwargs):
         super(Single_Bin_BAM, self).__init__(*args, **kwargs)
-        bin_zeroes = str('0' * (3 - len(self.bin_num)))
-        self.out_prefix = djoin(gp.aln_dir, 'ema-bin-' + bin_zeroes + self.bin_num)
+        self.ema_bin_file = 'ema-bin-' + str('0' * (3 - len(self.bin_num))) + self.bin_num
+        self.out_prefix = djoin(gp.aln_dir, self.ema_bin_file)
 
-    def requires(self):
-        return Generate_EMA_Bins()
+    # def requires(self):
+    #     return Generate_EMA_Bins()
 
     def output(self):
         return luigi.LocalTarget(self.out_prefix + '.bam') 
 
     def run(self):
-        subprocess.run(['/home/lam4003/bin/ema/ema', 'align', '-d', '-r', self.reference, '-s', \
-            djoin(djoin(gp.bin_dir, 'ema-bin-' + bin_zeroes + self.bin_num)), '-o', self.out_prefix + '.sam'])
+        subprocess.run(['/home/lam4003/bin/ema/ema', 'align', '-d', '-r', self.reference + '.fna', '-s', \
+            djoin(gp.bin_dir, self.ema_bin_file), '-o', self.out_prefix + '.sam'])
         subprocess.run(['samtools', 'view', '-hb', '-f', '0', '-F', '256', self.out_prefix + '.sam', '-o', self.output().path])
 
 
@@ -165,46 +109,13 @@ class Map_EMA_Clouds(luigi.Task):
         return Merge_Bin_BAMs() 
 
     def output(self):
-        return luigi.LocalTarget(djoin(gp.work_dir, 'ema_psort.csv'))
+        return luigi.LocalTarget(djoin(gp.work_dir, 'bsort.csv'))
 
     def run(self):
-        srt_bam = djoin(gp.work_dir, 'ema_psort.bam')
+        srt_bam = djoin(gp.work_dir, 'bsort.bam')
         srt_step = subprocess.run(['samtools', 'sort', self.input().path, '-o', srt_bam])
         idx_step = subprocess.run(['samtools', 'index', srt_bam])
         bam_to_annotate(srt_bam, self.ids_to_names, gp.work_dir, False)
-
-
-# class Map_Original_Clouds(luigi.Task):
-#     """Map barcoded reads to the metagenome and add barcode information."""
-
-#     def requires(self):
-#         return Generate_Bin_BAMs()
-
-#     def output(self):
-#         return luigi.LocalTarget(djoin(gp.work_dir, 'ema-nobc_psort.final.csv'))
-
-#     def run(self):
-#         raw_sam = djoin(gp.aln_dir, 'ema-nobc.sam')
-#         raw_bam = djoin(gp.work_dir, 'ema-nobc.bam')
-#         srt_bam = djoin(gp.work_dir, 'ema-nobc_psort.bam')
-
-#         map_step = subprocess.run(['bowtie2', '--sensitive-local', '-p', gp.num_threads, '-x', gp.reference, '--interleaved', djoin(gp.bin_dir, 'ema-nobc'), '-S', raw_sam])
-#         bam_step = subprocess.run(['samtools', 'view', '-hb', '-f', '0', '-F', '256', raw_sam, '-o', raw_bam]) # Primary alignments only
-#         srt_step = subprocess.run(['samtools', 'sort', raw_bam, '-o', srt_bam])
-#         idx_step = subprocess.run(['samtools', 'index', srt_bam])
-#         bam_to_annotate(srt_bam, gp.ids_to_names, gp.work_dir, False)
-#         add_barcodes(djoin(gp.read_dir, gp.sort_prefix) + '.R1.fastq', djoin(gp.work_dir, 'ema-nobc_psort.csv'), gp.work_dir)
-
-
-# def py_concat(f1, f2, fout):
-#     data = d2 = ''
-#     with open(f1) as r1: 
-#         data = f1.read() 
-#     with open(f2) as r2: 
-#         d2 = f2.read() 
-#     data += ('\n' + d2)
-#     with open (fout) as outw: 
-#         outw.write(data)
 
 
 class Subdivide_Original_Clouds(luigi.Task):
@@ -286,7 +197,7 @@ class Enhance_Original_FastQs(luigi.Task):
             yield Single_Sort_FastQ(in_dir = gp.enhd_cld_dir, prefix = gp.edit_prefix, direction = i, enhance_mode = True)
 
     def output(self):
-        return [luigi.LocalTarget(djoin(gp.read_dir, gp.final_prefix + '.R1.fastq')), luigi.LocalTarget(djoin(gp.read_dir, gp.final_prefix + '.R2.fastq'))]
+        return [luigi.LocalTarget(djoin(gp.work_dir, gp.final_prefix + '.R1.fastq')), luigi.LocalTarget(djoin(gp.work_dir, gp.final_prefix + '.R2.fastq'))]
 
 
 class cloudSPAdes(luigi.Task):
@@ -314,7 +225,7 @@ class Single_FastQ_to_Table(luigi.Task):
         return luigi.LocalTarget(djoin(gp.analyses_dir, '.'.join([gp.final_prefix, self.direction, 'csv'])))
 
     def run(self): 
-        fastq_to_table(djoin(gp.read_dir, '.'.join([gp.final_prefix, self.direction, 'fastq'])), 
+        fastq_to_table(djoin(gp.work_dir, '.'.join([gp.final_prefix, self.direction, 'fastq'])), 
                        djoin(gp.analyses_dir, '.'.join([gp.gstd_prefix, self.direction, 'csv'])), gp.analyses_dir)
 
 

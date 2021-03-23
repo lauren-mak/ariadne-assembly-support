@@ -7,6 +7,7 @@ import subprocess
 from sys import stderr
 
 # Pandas and numpy for data manipulation
+import altair as alt
 import numpy as np
 import pandas as pd
 from math import log2, fabs
@@ -117,30 +118,63 @@ def merge_clouds_fragments(forward_lst, reverse_lst):
     num_enhanced_clouds = 0 
     curr_barcode = forward_lst[0][0]
     cloud_ref_dict = {}
+    bc_status = {}
+    gstd_dct = {}
     for i in range(len(forward_lst)):
         barcode = forward_lst[i][0]
         if barcode != curr_barcode:
             for c in cloud_ref_dict:
-                frag_cts = Counter(cloud_ref_dict[c]).values()
-                size, purity, entropy = evaluate_cloud(frag_cts)
-                summary_info.append([curr_barcode, c, size, purity, entropy])
+                frag_cts = Counter(cloud_ref_dict[c])
+                size, purity, entropy = evaluate_cloud(frag_cts.values())
+                entire_barcode = curr_barcode + '-' + c
+                if purity < 1: 
+                    bc_status[entire_barcode] = 'Under'
+                for f in frag_cts.keys():
+                    if f not in gstd_dct:
+                        gstd_dct[f] = [] 
+                    gstd_dct[f].append(entire_barcode)
+                summary_info.append([entire_barcode, size, purity, entropy])
                 cloud_counts.append(size)
+            for f in gstd_dct:
+                if len(gstd_dct[f]) == 1:
+                    if gstd_dct[f][0] not in bc_status:
+                        bc_status[gstd_dct[f][0]] = 'Accurate'
+                else:
+                    for b in gstd_dct[f]:
+                        if b not in bc_status:
+                            bc_status[b] = 'Over'
             if (num_enhanced_clouds % 100000) == 0:
                 logger(f'Processed {num_enhanced_clouds} enhanced clouds')
                 num_enhanced_clouds += 1
             curr_barcode = barcode
             cloud_ref_dict = {}
+            gstd_dct = {}
         cloud_num = forward_lst[i][1] 
         if cloud_num not in cloud_ref_dict:
             cloud_ref_dict[cloud_num] = []
         cloud_ref_dict[cloud_num].append(forward_lst[i][2])
         cloud_ref_dict[cloud_num].append(reverse_lst[i][2])
     for c in cloud_ref_dict:
-        frag_cts = Counter(cloud_ref_dict[c]).values()
-        size, purity, entropy = evaluate_cloud(frag_cts)
-        summary_info.append([curr_barcode, c, size, purity, entropy])
+        frag_cts = Counter(cloud_ref_dict[c])
+        size, purity, entropy = evaluate_cloud(frag_cts.values())
+        summary_info.append([curr_barcode + '-' + c, size, purity, entropy])
         cloud_counts.append(size)
-    return summary_info, cloud_counts
+        entire_barcode = curr_barcode + '-' + c
+        if purity < 1: 
+            bc_status[entire_barcode] = 'Under'
+        for f in frag_cts.keys():
+            if f not in gstd_dct:
+                gstd_dct[f] = [] 
+            gstd_dct[f].append(entire_barcode)
+    for f in gstd_dct:
+        if len(gstd_dct[f]) == 1:
+            if gstd_dct[f][0] not in bc_status:
+                bc_status[gstd_dct[f][0]] = 'Accurate'
+        else:
+            for b in gstd_dct[f]:
+                if b not in bc_status:
+                    bc_status[b] = 'Over'
+    return summary_info, cloud_counts, bc_status
 
 
 def dataset_summary(cloud_counts, prefix):
@@ -151,14 +185,12 @@ def dataset_summary(cloud_counts, prefix):
     logger('Finished generating dataframe, plotting frequency information')
     plt.plot(size_df)
     plt.savefig(prefix + '.cumulative_counts.png', format = 'png', dpi = 1200)
-    # size_df['Count_Freq'] = size_df.iloc[:,0]/num_unique_barcodes
-    # size_df['Cum_Freq'] = size_df.iloc[:,0].cumsum()/num_unique_barcodes
 
     middle_index = int(len(size_list)/2)
     size_median = size_list[middle_index]
     if len(size_list) % 2 == 0:
         size_median = (size_list[middle_index - 1] + size_list[middle_index])/2
-    summary_info = [['Num_Clouds', num_unique_barcodes], 
+    ct_summary = [['Num_Clouds', num_unique_barcodes], 
                     ['Min_Num_Reads', size_list[0]], 
                     ['Max_Num_Reads', size_list[-1]],
                     ['Mean_Num_Reads', sum(size_list) / num_unique_barcodes],
@@ -166,14 +198,7 @@ def dataset_summary(cloud_counts, prefix):
                     ['Med_Num_Reads', size_median]]
     with open(prefix + '.summary.csv', 'w') as of: # Barcode,Cloud_Num,Species_0,Species_1,Species_2...
         ow = writer(of)
-        ow.writerows(summary_info)
-    # summary_info = [pd.Series([num_unique_barcodes, 'Num_Clouds', 'NA'], index=size_df.columns),
-    #             pd.Series([size_list[0], 'Min_Num_Reads', 'NA'], index=size_df.columns),
-    #             pd.Series([size_list[-1], 'Max_Num_Reads', 'NA'], index=size_df.columns),
-    #             pd.Series([sum(size_list) / num_unique_barcodes, 'Mean_Num_Reads', 'NA'], index=size_df.columns),
-    #             pd.Series([size_median, 'Med_Num_Reads', 'NA'], index=size_df.columns)]
-    # size_df = size_df.append(summary_info, ignore_index=True)
-    # size_df.to_csv(outdir + '/' + prefix + '.dataset.csv', header = False)
+        ow.writerows(ct_summary)
 
 
 def generate_summaries(forward_tbl, reverse_tbl, outdir, id_csv): 
@@ -192,14 +217,14 @@ def generate_summaries(forward_tbl, reverse_tbl, outdir, id_csv):
             ow = writer(of)
             ow.writerow(['Barcode', 'Cloud_Num'] + species_lst + ['None'])
             ow.writerows(species_info)
+        summary_tbl = pd.DataFrame(summary_info, columns = ['Barcode-Cloud_Num', 'Size', 'Purity', 'Entropy'])
     else:
-        summary_info, cloud_counts = merge_clouds_fragments(forward_lst, reverse_lst)
-
+        summary_info, cloud_counts, bc_status = merge_clouds_fragments(forward_lst, reverse_lst)
+        summary_tbl = pd.DataFrame(summary_info, columns = ['Barcode-Cloud_Num', 'Size', 'Purity', 'Entropy'])
+        summary_tbl['Status'] = summary_tbl['Barcode-Cloud_Num'].map(bc_status)
+    
     dataset_summary(cloud_counts, prefix)
-    with open(prefix + '.statistics.csv', 'w') as of:
-        ow = writer(of)
-        ow.writerow(['Barcode', 'Cloud_Num', 'Size', 'Purity', 'Entropy'])
-        ow.writerows(summary_info)
+    summary_tbl.to_csv(prefix + '.statistics.csv', index = False)
 
 
 def load_dataframes(file_prefixes, outdir):
@@ -224,14 +249,11 @@ def make_main_graphs(all_df_list, distances, param_name, outdir):
     for df in all_df_list:
         curr_lst = df[param_name]
         purity_list.append(curr_lst)
-        curr_hist, bins = np.histogram(curr_lst, bins=bins)
+        curr_hist, bins = np.histogram(curr_lst, bins = bins)
         curr_freqs = np.divide(curr_hist, len(curr_lst))
         hist_list.append(curr_freqs)
 
     fig = plt.figure()
-    # norm = colors.Normalize(vmin = 0, vmax = len(all_df_list) - 1)
-    # normed_distances = list(map(lambda x: norm(x), range(len(all_df_list))))
-    # cmap = cm.RdPu_r(normed_distances, bytes=False) # Luminance increases monotonically
     cmap = cm.Set2(np.linspace(0, 1, len(all_df_list)))
 
     plt.hist(purity_list, bins, label = distances, color = cmap)
@@ -241,40 +263,90 @@ def make_main_graphs(all_df_list, distances, param_name, outdir):
     fig.savefig('{}/{}.png'.format(outdir, param_name), format = 'png', dpi = 1200)
     plt.clf()
 
-    num_rows = int(len(distances)/3 + 1)
-    fig, axs = plt.subplots(num_rows, 3)
+    graphs_per_row = 4
+    num_rows = int(len(distances)/graphs_per_row + 1)
+    fig = plt.figure() # plt.subplots(num_rows, graphs_per_row, constrained_layout = True)
     x = []
     for i in range(num_rows):
-        x += [i]*3
-    y = list(range(3)) * num_rows
+        x += [i] * graphs_per_row
+    y = list(range(graphs_per_row)) * num_rows
     for i in range(len(hist_list)):
-        axs[x[i],y[i]].plot(bins[:-1], hist_list[i], color = cmap[i])
-        axs[x[i],y[i]].set_title(f'Search Distance = {distances[i]}')
-    for ax in axs.flat:
-        ax.set(xlabel='Purity', ylabel='Prop. Read Clouds')
+        ax = plt.subplot2grid((num_rows, graphs_per_row), (x[i], y[i])) #, constrained_layout = True)
+        ax.plot(bins[:-1], hist_list[i], color = cmap[i])
+        ax.set_title(f'Search Distance = {distances[i]}')
+        ax.set(xlabel=param_name, ylabel='Prop. Read Clouds')
+        # axs[x[i],y[i]].plot(bins[:-1], hist_list[i], color = cmap[i])
+        # axs[x[i],y[i]].set_title(f'Search Distance = {distances[i]}')
+    # for ax in axs.flat:
+    #     ax.set(xlabel='Purity', ylabel='Prop. Read Clouds')
     # Hide x labels and tick labels for everything but the left- and right-most plots. Removed because different axis scales.
     # for ax in axs.flat:
     #     ax.label_outer()
+    fig.tight_layout() 
     fig.savefig('{}/{}_scaled.png'.format(outdir, param_name), format = 'png', dpi = 1200)
 
 
-def make_secondary_graphs(param_list, param_stdev, distances, param_name, outdir): 
+def make_secondary_graphs(param_list, distances, param_name, outdir): # param_stdev
     # Matplotlib settings needed to create complex bar plots
     mpl.rcParams['font.size'] = 6
     mpl.rcParams['figure.dpi'] = 250
     scale_y = 1e3
 
     fig = plt.figure()
-    # norm = colors.Normalize(vmin = 0, vmax = len(param_list) - 1)
-    # normed_distances = list(map(lambda x: norm(x), range(len(param_list))))
-    # cmap = cm.RdPu_r(normed_distances, bytes=False) # Luminance increases monotonically
     cmap = cm.Set2(np.linspace(0, 1, len(param_list)))
 
     # y_error = [np.subtract(param_list, param_stdev), np.add(param_list, param_stdev)]
-    
     plt.bar(distances, param_list, color = cmap) # yerr = y_error, 
     plt.xlabel('Search Distance')
     plt.ylabel(param_name)
+    param2strng = param_name.replace(' ', '_').replace('.', '')
+    fig.savefig('{}/{}.png'.format(outdir, param2strng), format = 'png', dpi = 1200)
+
+
+def make_size_graphs(all_df_list, distances, param_name, outdir):
+    # Matplotlib settings needed to create complex bar plots
+    mpl.rcParams['font.size'] = 6
+    mpl.rcParams['figure.dpi'] = 250
+    scale_y = 1e3
+
+    bins = np.linspace(0, 150, 20)
+    purity_list = []
+    for df in all_df_list:
+        purity_list.append(df[param_name])
+
+    graphs_per_row = 4
+    num_rows = int(len(distances)/graphs_per_row + 1)
+    fig = plt.figure() # plt.subplots(num_rows, graphs_per_row, constrained_layout = True)
+    cmap = cm.Set2(np.linspace(0, 1, len(purity_list)))
+    x = []
+    for i in range(num_rows):
+        x += [i] * graphs_per_row
+    y = list(range(graphs_per_row)) * num_rows
+    for i, p in enumerate(purity_list):
+        ax = plt.subplot2grid((num_rows, graphs_per_row), (x[i], y[i])) #, constrained_layout = True)
+        ax.hist(p, bins, color = cmap[i])
+        # ax.plot(bins[:-1], hist_list[i], color = cmap[i])
+        ax.set_title(f'Search Distance = {distances[i]}')
+        ax.set(xlabel=param_name, ylabel='Prop. Read Clouds')
+    fig.tight_layout() 
+    fig.savefig('{}/{}.png'.format(outdir, param_name), format = 'png', dpi = 1200)
+
+
+def make_status_graphs(param_df, distances, param_name, outdir): # param_stdev
+    # Matplotlib settings needed to create complex bar plots
+    mpl.rcParams['font.size'] = 6
+    mpl.rcParams['figure.dpi'] = 250
+    scale_y = 1e3
+
+    # fig = plt.figure()
+    cmap = cm.Set2(np.linspace(0, 1, param_df.shape[1]))
+
+    ax = param_df.plot(kind = 'bar', color = cmap)
+    fig = ax.get_figure()
+    # y_error = [np.subtract(param_list, param_stdev), np.add(param_list, param_stdev)]
+    # plt.bar(distances, param_df, color = cmap) # yerr = y_error, 
+    ax.set_xlabel('Search Distance')
+    ax.set_ylabel(param_name)
     param2strng = param_name.replace(' ', '_').replace('.', '')
     fig.savefig('{}/{}.png'.format(outdir, param2strng), format = 'png', dpi = 1200)
 
@@ -284,35 +356,137 @@ def evaluate_clouds(distances, prefixes, outdir):
     start_time = datetime.now()
     logger(f'Generating summary statistics for search distances {distances} of the dataset {"_".join(outdir.split("_")[:-1])}')
 
+    # Load alignment info tables for each search distance and filter for clouds of size < 2
     search_distances = distances.split(',')
     file_prefixes = prefixes.split(',')
     all_df_list = load_dataframes(file_prefixes, outdir) 
-    # Load alignment info tables for each search distance and filter for clouds of size < 2
     logger('Loaded the search distance dataframes ' + distances)
 
-    # Comparing the purity and Shannon entropy distributions for each search distances
-    make_main_graphs(all_df_list, search_distances, 'Purity', outdir)
-    make_main_graphs(all_df_list, search_distances, 'Entropy', outdir)
-    logger('Finished the main purity and entropy comparison graphs')
+    # Comparing the purity Shannon entropy, and size distributions for each search distances
+    avg_param_lst = []
+    std_param_lst = []
+    for i, param in enumerate(['Purity', 'Entropy']):
+        make_main_graphs(all_df_list, search_distances, param, outdir)
+        avg_param_lst.append(list(map(lambda df: np.mean(df[param]), all_df_list)))
+        std_param_lst.append(list(map(lambda df: np.std(df[param]), all_df_list)))
+        make_secondary_graphs(avg_param_lst[i], search_distances, 'Avg. Cloud ' + param, outdir) # std_param_lst[i]
+        logger('Finished ' + param + ' comparison graphs')
 
-    # What is the average size of a read-cloud?
-    avg_cloud_size = list(map(lambda df: np.mean(df['Size']), all_df_list))
-    size_stdev = list(map(lambda df: np.std(df['Size']), all_df_list))
-    make_secondary_graphs(avg_cloud_size, size_stdev, search_distances, 'Avg. Cloud Size', outdir)
-    # What is the average purity of the read clouds?
-    avg_cloud_purity = list(map(lambda df: np.mean(df['Purity']), all_df_list))
-    purity_stdev = list(map(lambda df: np.std(df['Purity']), all_df_list))
-    make_secondary_graphs(avg_cloud_purity, purity_stdev, search_distances, 'Avg. Cloud Purity.', outdir)
-    # What is the average purity of the read clouds?
-    avg_cloud_entropy = list(map(lambda df: np.mean(df['Entropy']), all_df_list))
-    entropy_stdev = list(map(lambda df: np.std(df['Entropy']), all_df_list))
-    make_secondary_graphs(avg_cloud_entropy, entropy_stdev, search_distances, 'Avg. Cloud Entropy.', outdir)
-    logger('Finished the accessory graphs')
+    # Comparing the size of the deconvolved read clouds.
+    make_size_graphs(all_df_list, search_distances, 'Size', outdir)
+    avg_param_lst.append(list(map(lambda df: np.mean(df['Size']), all_df_list)))
+    std_param_lst.append(list(map(lambda df: np.std(df['Size']), all_df_list)))
+    make_secondary_graphs(avg_param_lst[-1], search_distances, 'Avg. Cloud Size', outdir) # std_param_lst[i]
+    logger('Finished Size comparison graphs')
+
+    # Comparing the deconvolution status (i.e.: is it over, under, or accurately deconvolved) for each search distance
+    status_df_list = []
+    for i, df in enumerate(all_df_list):
+        status_df_list.append(pd.DataFrame(dict(Counter(df['Status'])), index = [search_distances[i]]))
+    status_df = pd.concat(status_df_list).fillna(0).T
+    normed_df = status_df.div(status_df.sum(axis = 0), axis = 1)
+    make_status_graphs(status_df, search_distances, 'Cloud Deconv. Status', outdir)
+    make_status_graphs(normed_df, search_distances, 'Normalized Deconv. Status', outdir)
+
     # TODO How many reads were deconvolved?
 
-    df = pd.DataFrame(list(zip(search_distances, avg_cloud_size, size_stdev, avg_cloud_purity, purity_stdev, avg_cloud_entropy, entropy_stdev)), 
-        columns = ['Search_Distances', 'Avg. Cloud Size', 'Std. Dev.', 'Avg. Cloud Purity', 'Std. Dev.', 'Avg. Cloud Entropy', 'Std. Dev.'])
+    avg_stats_df = pd.DataFrame(list(zip(search_distances, avg_param_lst[0], std_param_lst[0], avg_param_lst[1], std_param_lst[1], \
+        avg_param_lst[2], std_param_lst[2])), 
+        columns = ['Search_Distances', 'Avg. Cloud Purity', 'Std. Dev.', 'Avg. Cloud Entropy', 'Std. Dev.', 'Avg. Cloud Size', \
+        'Std. Dev.'])
+    avg_stats_df.set_index('Search_Distances', inplace = True)
+    df = pd.concat([avg_stats_df, status_df.T, normed_df.T], axis = 1)
     df.round(decimals = 2).to_csv('{}/{}.tbl'.format(outdir, 'Avg_Summary_Stats'))
+
+
+def graph_assembly_stats(base_dir):
+    """Make gridded comparison of metaQUAST assembly statistics."""
+
+    na50_tbl = pd.read_csv('NA50.csv', header = 0)
+    # Load metaQUAST tables wth the four relevant assembly statistics
+    mq_tbls = []
+    for dp in ['mock5_10x', 'mock6_lsq', 'mock20_10x_100m', 'mock20_tsq_100m']: 
+        tbls = []
+        dfs = []
+        na50_sub = na50_tbl.loc[na50_tbl['Dataset'] == dp]
+        renamed_df = na50_sub.rename(columns = {'Fragments': 'Reference', '5000': 'Ariadne'})
+        if dp is 'mock20_tsq_100m':
+            tmp_df = renamed_df.rename(columns = {'10000': '1000', '15000': '2000', '20000': '4000'}).astype('str')
+            clean_df = tmp_df[['Illumina', 'No_Deconv', 'Reference', 'Ariadne', '1000', '2000', '4000']].astype('str')
+        else:
+            clean_df = renamed_df[['Illumina', 'No_Deconv', 'Reference', 'Ariadne', '10000', '15000', '20000']].astype('str')
+        clean_df.replace(['-'], ['0'], inplace = True)
+        aln_only = clean_df.drop(clean_df.loc[clean_df.index=='not_aligned'].index)
+        tbls.append(aln_only.astype('int64')) 
+        dfs.append(pd.DataFrame(aln_only.astype('int64')))
+        full_prefix = join(base_dir, dp + '_analyses', 'metaQUAST', 'summary', 'TSV')
+        for f in ['Largest_alignment.tsv', 'Misassembled_contigs_length.tsv', 'Total_length.tsv']:
+            tmp_df = pd.read_csv(join(full_prefix, f), sep = '\t', header = 0, index_col = 0)
+            renamed_df = tmp_df.rename(columns = {'Fragments': 'Reference', '5000': 'Ariadne'})
+            if dp is 'mock20_tsq_100m':
+                clean_df = renamed_df[['Illumina', 'No_Deconv', 'Reference', 'Ariadne', '1000', '2000', '4000']].astype('str')
+            else:
+                clean_df = renamed_df[['Illumina', 'No_Deconv', 'Reference', 'Ariadne', '10000', '15000', '20000']].astype('str')
+            clean_df.replace(['-'], ['0'], inplace = True)
+            aln_only = clean_df.drop(clean_df.loc[clean_df.index=='not_aligned'].index)
+            tbls.append(aln_only.astype('int64')) 
+            dfs.append(pd.DataFrame(aln_only.astype('int64')))
+        pd.concat(tbls).to_csv(dp + '.csv')
+        mq_tbls.append(tbls)
+
+    # Scale Reference and Ariadne approaches by the No_Deconv column
+    mq_dct = {'Dataset': [], 'Deconv_Method': [], 'NA50': [], 'Largest_Aln': [], 'Misassembly_Rate': []}
+    for i, dp in enumerate(['MOCK5 10x', 'MOCK5 LoopSeq', 'MOCK20 10x', 'MOCK20 TELLSeq']): 
+        num_species = len(mq_tbls[i][0])
+        mq_dct['Dataset'].extend([dp] * num_species * 3)
+        mq_dct['Deconv_Method'].extend(['No_Deconv'] * num_species + ['Reference'] * num_species + ['Ariadne'] * num_species)
+        for j, f in enumerate(['NA50', 'Largest_Aln', 'Misassembly_Rate']):
+            clean_df = mq_tbls[i][j]
+            if f is 'Misassembly_Rate': # First divide the whole Misassembled_contigs_length by Total_length
+                clean_df = mq_tbls[i][j].div(mq_tbls[i][j + 1])
+            for d in ['No_Deconv', 'Reference', 'Ariadne']:
+                mq_dct[f].extend(clean_df[d])
+            #     for d in ['Reference', 'Ariadne']:
+            #         mq_dct[f].extend(clean_df[d] / clean_df['No_Deconv'])
+            # else:
+            #     for d in ['Reference', 'Ariadne']:
+            #         mq_dct[f].extend(clean_df[d] - clean_df['No_Deconv'])
+    pd.DataFrame.from_dict(mq_dct).to_csv(join(base_dir, 'metaQUAST_all_three.csv'))
+
+
+def graph_cloud_stats(base_dir, num_clouds, param, scale):
+    """Make gridded comparison of read cloud summary statistics."""
+
+    # Load read cloud statistics from generate_summaries()
+    deconv_tbls = []
+    dataset_prefixes = ['mock5_10x', 'mock6_lsq', 'mock20_10x_100m', 'mock20_tsq_100m']
+    deconv_prefixes = ['no_deconv', '_frg_bsort', '5000']
+    for i, dp in enumerate(['MOCK5 10x', 'MOCK5 LoopSeq', 'MOCK20 10x', 'MOCK20 TELLSeq']): 
+        for j, d in enumerate(['No_Deconv', 'Reference', 'Ariadne']):
+            full_prefix = join(base_dir, dataset_prefixes[i] + '_analyses') + '/'
+            full_prefix += dataset_prefixes[i] if j == 1 else ''
+            full_prefix += deconv_prefixes[j]
+            tmp_df = pd.read_csv(full_prefix + '.statistics.csv', header = 0)[['Size', param]]
+            tmp_df['Dataset'] = [dp] * len(tmp_df)
+            tmp_df['Deconv_Method'] = [d] * len(tmp_df)
+            downsampled_df = tmp_df.sample(n = int(num_clouds))
+            if scale:
+                downsampled_df['Size'] = downsampled_df['Size'] / max(downsampled_df['Size'])
+            deconv_tbls.append(downsampled_df)
+    deconv_df = pd.concat(deconv_tbls)
+    deconv_df.to_csv(join(base_dir, param + '_Cloud_Stats.csv'))
+
+
+def tidy_quast_report(prefix, outdir):
+    """Trim full metaQUAST report to more easily interpretable and camera-ready versions."""
+    report_df = pd.read_csv(join(outdir, 'report.tsv'), sep = '\t', header = 0, index_col = 0)
+    kept_info = [ 'Genome fraction (%)', 'Duplication ratio', 'Largest alignment', 'Total aligned length',\
+        'NA50', '# misassemblies', '# misassembled contigs', 'Misassembled contigs length', '# unaligned contigs',\
+        'Unaligned length', '# N\'s per 100 kbp', '# mismatches per 100 kbp', '# contigs', 'Total length (>= 0 bp)' ]
+    trimmed_report = report_df.loc[report_df.index.intersection(kept_info)]
+    sorted_report = trimmed_report.reindex(kept_info, axis = 'index')
+    sorted_report.to_csv(join(outdir, prefix + '.metaQUAST.csv'))
+    sorted_report.to_latex(join(outdir, prefix + '.metaQUAST.tex'))
 
 
 def map_read_clouds(fg, prefix, fa, seq_to_cld_num):

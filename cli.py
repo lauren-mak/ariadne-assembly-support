@@ -135,6 +135,37 @@ def make_barcode_whitelist(in_fq, outdir):
     assembly_support.make_barcode_whitelist(in_fq, outdir)
 
 
+@main.command('interleave_fastqs')
+@click.argument('in_fq_prefix') # Read directory plus sample name
+@click.argument('outdir') 
+@click.option('--ema', '-ema', flag_value = True)
+def interleave_fastqs(in_fq_prefix, outdir, ema):
+    """Interleave paired-end FastQs."""
+    assembly_support.interleave_fastqs(in_fq_prefix, outdir, ema)
+
+
+@main.command('tidy_quast_report')
+@click.argument('prefix')
+@click.argument('outdir') 
+def tidy_quast_report(prefix, outdir):
+    evaluate_support.tidy_quast_report(prefix, outdir)
+
+
+@main.command('graph_assembly_stats')
+@click.argument('base_dir')
+def tidy_quast_report(base_dir):
+    evaluate_support.graph_assembly_stats(base_dir)
+
+
+@main.command('graph_cloud_stats')
+@click.argument('base_dir')
+@click.argument('num_clouds')
+@click.argument('param')
+@click.option('--scale', '-s', flag_value = True)
+def tidy_quast_report(base_dir, num_clouds, param, scale):
+    evaluate_support.graph_cloud_stats(base_dir, num_clouds, param, scale)
+
+
 if __name__ == '__main__':
     main()
 
